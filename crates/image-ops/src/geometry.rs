@@ -94,12 +94,16 @@ pub fn ops_transpose(py: Python<'_>, image: &Image, orientation: u8) -> PyResult
 }
 
 pub fn transpose<const C: usize>(source: &[u8], output: &mut [u8], w: usize, h: usize, orientation: u8) {
+    if C == 1 && orientation >= 5 {
+        transpose_tiles::<1, 8, 8>(source, output, w, h, orientation, blanket_kernels::ops::transpose_gray_eight);
+        return;
+    }
     if C == 3 && orientation >= 5 {
-        transpose_four::<3, 12>(source, output, w, h, orientation, blanket_kernels::ops::transpose_rgb_four);
+        transpose_tiles::<3, 4, 12>(source, output, w, h, orientation, blanket_kernels::ops::transpose_rgb_four);
         return;
     }
     if C == 4 && orientation >= 5 {
-        transpose_four::<4, 16>(source, output, w, h, orientation, blanket_kernels::ops::transpose_rgba_four);
+        transpose_tiles::<4, 4, 16>(source, output, w, h, orientation, blanket_kernels::ops::transpose_rgba_four);
         return;
     }
     let source = source.as_chunks::<C>().0;
@@ -155,21 +159,21 @@ pub fn transpose<const C: usize>(source: &[u8], output: &mut [u8], w: usize, h: 
     });
 }
 
-fn transpose_four<const C: usize, const N: usize>(
-    source: &[u8], output: &mut [u8], w: usize, h: usize, orientation: u8, kernel: impl Fn([&[u8]; 4]) -> [[u8; N]; 4] + Sync + Send,
+fn transpose_tiles<const C: usize, const TILE: usize, const N: usize>(
+    source: &[u8], output: &mut [u8], w: usize, h: usize, orientation: u8, kernel: impl Fn([&[u8]; TILE]) -> [[u8; N]; TILE] + Sync + Send,
 ) {
     let reverse_rows = orientation == 7 || orientation == 8;
     let reverse_columns = orientation == 6 || orientation == 7;
     chunks_mut_above(output, h * C * 32, 1024 << 10, |band, rows| {
         for x0 in (0..h).step_by(32) {
             let limit = (x0 + 32).min(h);
-            for (group, rows) in rows.chunks_mut(h * C * 4).enumerate() {
+            for (group, rows) in rows.chunks_mut(h * C * TILE).enumerate() {
                 let count = rows.len() / (h * C);
-                let y = band * 32 + group * 4;
-                if count == 4 {
-                    let sx = if reverse_rows { w - y - 4 } else { y };
-                    let end = limit / 4 * 4;
-                    for x in (x0..end).step_by(4) {
+                let y = band * 32 + group * TILE;
+                if count == TILE {
+                    let sx = if reverse_rows { w - y - TILE } else { y };
+                    let end = limit / TILE * TILE;
+                    for x in (x0..end).step_by(TILE) {
                         let input = std::array::from_fn(|i| {
                             let sy = if reverse_columns { h - 1 - x - i } else { x + i };
                             &source[(sy * w + sx) * C..][..N]
@@ -243,13 +247,15 @@ mod tests {
             }
         }
         for offset in [0, 1, 7] {
-            for w in [0, 1, 3, 4, 5, 15, 16, 17, 31, 32, 33] {
-                for h in [0, 1, 3, 4, 5, 31, 32, 33] {
+            for w in [0, 1, 3, 4, 5, 7, 8, 9, 15, 16, 17, 31, 32, 33] {
+                for h in [0, 1, 3, 4, 5, 7, 8, 9, 31, 32, 33] {
+                    check::<1>(w, h, offset);
                     check::<3>(w, h, offset);
                     check::<4>(w, h, offset);
                 }
             }
         }
+        check::<1>(1051, 1057, 1);
         check::<3>(521, 509, 1);
         check::<4>(521, 509, 1);
     }

@@ -55,6 +55,31 @@ pub fn reverse_packed<const C: usize>(source: &[u8], output: &mut [std::mem::May
 }
 
 #[inline]
+pub fn transpose_gray_eight(rows: [&[u8]; 8]) -> [[u8; 8]; 8] {
+    use std::simd::ToBytes;
+
+    let [a, b, c, d, e, f, g, h] = rows.map(Simd::<u8, 8>::from_slice);
+    let (a, b) = a.interleave(b);
+    let (c, d) = c.interleave(d);
+    let (e, f) = e.interleave(f);
+    let (g, h) = g.interleave(h);
+    let pair = |a, b| Simd::<u16, 4>::from_ne_bytes(a).interleave(Simd::from_ne_bytes(b));
+    let (a0, a1) = pair(a, c);
+    let (a2, a3) = pair(b, d);
+    let (b0, b1) = pair(e, g);
+    let (b2, b3) = pair(f, h);
+    let column_pair = |a: Simd<u16, 4>, b: Simd<u16, 4>| {
+        let (lo, hi) = Simd::<u32, 2>::from_ne_bytes(a.to_ne_bytes()).interleave(Simd::from_ne_bytes(b.to_ne_bytes()));
+        [lo.to_ne_bytes().to_array(), hi.to_ne_bytes().to_array()]
+    };
+    let [c0, c1] = column_pair(a0, b0);
+    let [c2, c3] = column_pair(a1, b1);
+    let [c4, c5] = column_pair(a2, b2);
+    let [c6, c7] = column_pair(a3, b3);
+    [c0, c1, c2, c3, c4, c5, c6, c7]
+}
+
+#[inline]
 pub fn transpose_rgba_four(rows: [&[u8]; 4]) -> [[u8; 16]; 4] {
     use std::simd::simd_swizzle;
 
