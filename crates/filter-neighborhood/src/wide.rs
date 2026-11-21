@@ -7,6 +7,7 @@ use std::simd::num::{SimdFloat, SimdInt};
 use blanket_core::{Image, PixelMode};
 use pyo3::exceptions::PyMemoryError;
 use pyo3::prelude::*;
+use zerocopy::FromBytes;
 
 pub(crate) fn kernel(image: &Image, size: usize, scale: f32, offset: f32, weights: &[f32]) -> PyResult<Image> {
     let bytes = image.raw_data()?;
@@ -14,9 +15,7 @@ pub(crate) fn kernel(image: &Image, size: usize, scale: f32, offset: f32, weight
     let (width, height) = (image.width() as usize, image.height() as usize);
     if cfg!(target_endian = "little") {
         let mut pixels = blanket_core::buffers::copy(bytes)?;
-        // All i32 bit patterns are valid; keep the allocation owned as bytes.
-        let (prefix, values, suffix) = unsafe { pixels.align_to_mut::<i32>() };
-        if prefix.is_empty() && suffix.is_empty() {
+        if let Ok(values) = <[i32]>::mut_from_bytes(&mut pixels) {
             convolve(&source, values, size, (width, height), scale, offset, weights);
             return Image::from_integer_bytes(image.width(), image.height(), image.pixel_mode(), pixels);
         }
@@ -33,23 +32,19 @@ pub(crate) fn kernel(image: &Image, size: usize, scale: f32, offset: f32, weight
 }
 
 fn integer_view(bytes: &[u8]) -> Cow<'_, [i32]> {
-    if cfg!(target_endian = "little") {
-        // All i32 bit patterns are valid; align_to checks alignment and bounds.
-        let (prefix, values, suffix) = unsafe { bytes.align_to::<i32>() };
-        if prefix.is_empty() && suffix.is_empty() {
-            return Cow::Borrowed(values);
-        }
+    if cfg!(target_endian = "little")
+        && let Ok(values) = <[i32]>::ref_from_bytes(bytes)
+    {
+        return Cow::Borrowed(values);
     }
     Cow::Owned(bytes.as_chunks::<4>().0.iter().map(|&value| i32::from_le_bytes(value)).collect())
 }
 
 fn float_view(bytes: &[u8]) -> Cow<'_, [f32]> {
-    if cfg!(target_endian = "little") {
-        // All f32 bit patterns are valid; align_to checks alignment and bounds.
-        let (prefix, values, suffix) = unsafe { bytes.align_to::<f32>() };
-        if prefix.is_empty() && suffix.is_empty() {
-            return Cow::Borrowed(values);
-        }
+    if cfg!(target_endian = "little")
+        && let Ok(values) = <[f32]>::ref_from_bytes(bytes)
+    {
+        return Cow::Borrowed(values);
     }
     Cow::Owned(bytes.as_chunks::<4>().0.iter().map(|&value| f32::from_le_bytes(value)).collect())
 }

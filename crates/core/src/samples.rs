@@ -4,6 +4,7 @@ use std::borrow::Cow;
 use std::simd::{Simd, ToBytes};
 
 use pyo3::prelude::*;
+use zerocopy::FromBytes;
 
 use crate::raster::{Image, PixelMode};
 
@@ -28,12 +29,10 @@ pub fn view(image: &Image) -> PyResult<Cow<'_, [u16]>> {
 }
 
 fn view_bytes(source: &[u8], big_endian: bool) -> PyResult<Cow<'_, [u16]>> {
-    if big_endian == cfg!(target_endian = "big") {
-        // SAFETY: All u16 bit patterns are valid; align_to checks alignment and bounds.
-        let (prefix, samples, suffix) = unsafe { source.align_to::<u16>() };
-        if prefix.is_empty() && suffix.is_empty() {
-            return Ok(Cow::Borrowed(samples));
-        }
+    if big_endian == cfg!(target_endian = "big")
+        && let Ok(samples) = <[u16]>::ref_from_bytes(source)
+    {
+        return Ok(Cow::Borrowed(samples));
     }
     decode(source, big_endian).map(Cow::Owned)
 }
@@ -96,9 +95,7 @@ pub fn output_bytes(image: &Image, pixels: Vec<u8>) -> PyResult<Image> {
 pub fn with_output(image: &Image, initialize: Option<&[u16]>, process: impl FnOnce(&mut [u16])) -> PyResult<Image> {
     let len = image.raw_data()?.len();
     let mut pixels = if let Some(source) = initialize { encode(source, cfg!(target_endian = "big"))? } else { crate::raster::alloc_pixels(len)? };
-    // SAFETY: All u16 bit patterns are valid; the output allocation is exclusively owned.
-    let (prefix, values, suffix) = unsafe { pixels.align_to_mut::<u16>() };
-    if !prefix.is_empty() || !suffix.is_empty() {
+    let Ok(values) = <[u16]>::mut_from_bytes(&mut pixels) else {
         let mut values = vec![0; len / 2];
         if let Some(source) = initialize {
             values.copy_from_slice(source);
@@ -106,7 +103,7 @@ pub fn with_output(image: &Image, initialize: Option<&[u16]>, process: impl FnOn
         process(&mut values);
         drop(pixels);
         return output(image, &values);
-    }
+    };
     process(values);
     if image.mode.is_big_endian() != cfg!(target_endian = "big") {
         for value in values {

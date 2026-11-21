@@ -4,6 +4,7 @@ use pyo3::buffer::PyBuffer;
 use pyo3::exceptions::{PyIndexError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyMemoryView, PySlice, PyTuple};
+use zerocopy::FromBytes;
 
 #[pyfunction(name = "image_tobytes", signature = (source_image, rawmode=None, stride=0, orientation=1))]
 pub(crate) fn tobytes(py: Python<'_>, source_image: &Image, rawmode: Option<&str>, stride: usize, orientation: i8) -> PyResult<Py<PyBytes>> {
@@ -222,9 +223,7 @@ fn array_bytes(obj: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
             ($($sample:ty),+ $(,)?) => {
                 $(if let Ok(buffer) = PyBuffer::<$sample>::get(obj) {
                     let mut pixels = alloc_pixels(buffer.len_bytes())?;
-                    // SAFETY: Numeric samples accept every bit pattern. Copying retains the source byte order for the conversion that follows.
-                    let (prefix, values, suffix) = unsafe { pixels.align_to_mut::<$sample>() };
-                    if prefix.is_empty() && suffix.is_empty() {
+                    if let Ok(values) = <[$sample]>::mut_from_bytes(&mut pixels) {
                         buffer.copy_to_slice(obj.py(), values)?;
                         return Ok(pixels);
                     }

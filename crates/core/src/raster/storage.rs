@@ -4,23 +4,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use pyo3::exceptions::{PyMemoryError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyList;
+use zerocopy::FromZeros;
 
 use super::PixelMode;
 use super::validation::{expected_len, validate_raw_data};
 
 /// Allocate a zeroed pixel buffer of `len` bytes, returning a memory error on failure.
 pub fn alloc_pixels(len: usize) -> PyResult<Vec<u8>> {
-    if len == 0 {
-        return Ok(Vec::new());
-    }
-    let layout = std::alloc::Layout::array::<u8>(len).map_err(|_| PyMemoryError::new_err("cannot allocate image"))?;
-    // SAFETY: The nonzero layout matches Vec<u8>; all bytes are initialized to zero.
-    let pointer = unsafe { std::alloc::alloc_zeroed(layout) };
-    if pointer.is_null() {
-        return Err(PyMemoryError::new_err("cannot allocate image"));
-    }
-    // SAFETY: Transfer the global allocation with its exact size and alignment.
-    Ok(unsafe { Vec::from_raw_parts(pointer, len, len) })
+    u8::new_vec_zeroed(len).map_err(|_| PyMemoryError::new_err("cannot allocate image"))
 }
 
 /// Immutable external pixel storage; writers must first detach into owned pixels.
