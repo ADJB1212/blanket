@@ -162,6 +162,14 @@ def test_group_hashes_connects_transitive_matches_in_input_order() -> None:
     assert ImageHash.group_hashes([], 1) == []
 
 
+def test_group_hashes_large_radius_one_search() -> None:
+    # Tripled bits place unrelated hashes at least three bits apart.
+    values = [value | (value << 16) | (value << 32) for value in range(1, 301)]
+    values.extend((0, 1 << 63, (1 << 63) | (1 << 62), 0))
+    hashes = [ImageHash.ImageHash(value) for value in values]
+    assert ImageHash.group_hashes(hashes, 1) == [[i] for i in range(300)] + [[300, 301, 302, 303]]
+
+
 @pytest.mark.parametrize("max_distance,error", [(-1, ValueError), (True, TypeError), (1.0, TypeError)])
 def test_hash_search_rejects_invalid_radii(max_distance, error) -> None:
     with pytest.raises(error, match="max_distance"):

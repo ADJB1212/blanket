@@ -55,7 +55,29 @@ fn group_hashes<'a>(hashes: impl Iterator<Item = &'a [u8]>, max_distance: usize)
         .collect();
 
     let mut group_by_hash: Vec<_> = (0..unique.len()).collect();
-    if max_distance > 0 {
+    if max_distance == 1 && unique.len() >= 256 && unique[0].len() == 8 {
+        // On 64-bit hashes, enumerating the single-bit neighbors bounds each search to 64 lookups.
+        let mut frontier = Vec::new();
+        for seed in 0..unique.len() {
+            if group_by_hash[seed] != seed {
+                continue;
+            }
+            frontier.push(seed);
+            while let Some(current) = frontier.pop() {
+                let value = u64::from_ne_bytes(unique[current].try_into().unwrap());
+                for bit in 0..u64::BITS {
+                    let neighbor = (value ^ (1_u64 << bit)).to_ne_bytes();
+                    if let Some(&candidate) = indices.get(neighbor.as_slice())
+                        && candidate > seed
+                        && group_by_hash[candidate] == candidate
+                    {
+                        group_by_hash[candidate] = seed;
+                        frontier.push(candidate);
+                    }
+                }
+            }
+        }
+    } else if max_distance > 0 {
         // Keep the earliest input hash as the representative of each group.
         let mut remaining: Vec<_> = (0..unique.len()).rev().collect();
         let mut frontier = Vec::new();
