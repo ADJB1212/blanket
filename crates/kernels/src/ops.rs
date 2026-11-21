@@ -123,6 +123,25 @@ pub fn reverse_rgb(source: &[u8], output: &mut [u8]) {
 pub fn lut<const C: usize>(source: &[u8], output: &mut [u8], tables: &[u8]) {
     assert_eq!(source.len(), output.len());
     assert!(tables.len() == 256 || tables.len() == C << 8);
+    if let Ok(table) = <&[u8; 256]>::try_from(tables) {
+        let banks = table.as_chunks::<64>().0;
+        let [a, b, c, d] = std::array::from_fn(|i| Simd::from_array(banks[i]));
+        let (blocks, tail) = source.as_chunks::<64>();
+        let (targets, rest) = output.as_chunks_mut::<64>();
+        for (&block, target) in blocks.iter().zip(targets) {
+            let indices = Simd::from_array(block);
+            // Out-of-range swizzle lanes are zero, so exactly one bank supplies each byte.
+            *target = (a.swizzle_dyn(indices)
+                | b.swizzle_dyn(indices - Simd::splat(64))
+                | c.swizzle_dyn(indices - Simd::splat(128))
+                | d.swizzle_dyn(indices - Simd::splat(192)))
+            .to_array();
+        }
+        for (&value, dst) in tail.iter().zip(rest) {
+            *dst = table[usize::from(value)];
+        }
+        return;
+    }
     let end = source.len() / (16 * C) * (16 * C);
     for i in (0..end).step_by(16 * C) {
         let values = load::<C>(&source[i..]);
@@ -218,6 +237,7 @@ mod tests {
     #[test]
     fn lut_matches_scalar_at_vector_boundaries() {
         check_lut::<1>();
+        check_lut::<2>();
         check_lut::<3>();
         check_lut::<4>();
     }
@@ -228,10 +248,11 @@ mod tests {
             for channels in [1, C] {
                 let tables: Vec<u8> = (0..channels * 256).map(|i| (i * 53 + i / 256 * 13) as u8).collect();
                 let mut expected = vec![0; input.len()];
-                let mut actual = expected.clone();
+                let mut actual = vec![91; input.len() + 2];
                 scalar_lut::<C>(&input, &mut expected, &tables);
-                lut::<C>(&input, &mut actual, &tables);
-                assert_eq!(actual, expected);
+                lut::<C>(&input, &mut actual[1..input.len() + 1], &tables);
+                assert_eq!(&actual[1..input.len() + 1], expected);
+                assert_eq!((actual[0], actual[input.len() + 1]), (91, 91));
             }
         }
     }
