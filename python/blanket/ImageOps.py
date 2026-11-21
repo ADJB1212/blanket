@@ -271,7 +271,7 @@ def _canvas_color(image: Image.Image, color: str | float | tuple[float, ...] | N
             color = color[0]
         return [0 if color is None else index(cast("SupportsIndex", color))]
     if image.mode in ("F", "RGB;F", "RGBA;F"):
-        return list(Image.new(image.mode, (1, 1), color).tobytes())
+        return list(Image._float_pixel(image.mode, color))
     return color_pixel(cast("Color | None", color), image.mode, image.bit_depth)
 
 

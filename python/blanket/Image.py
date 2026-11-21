@@ -3641,6 +3641,20 @@ def linear_gradient(mode: str) -> Image:
     return Image(ops_linear_gradient(mode))
 
 
+def _float_pixel(mode: str, color: str | float | tuple[float, ...] | None) -> bytes:
+    """Pack a float fill into the native pixel representation."""
+    if mode == "F":
+        if isinstance(color, tuple) and len(color) == 1:
+            color = color[0]
+        value = 0.0 if color is None else float(cast("FloatInput", color))
+        return struct.pack("<f", value)
+    channels = 3 if mode == "RGB;F" else 4
+    values = (0.0,) * channels if color is None else color if isinstance(color, tuple) else (float(color),) * channels
+    if len(values) != channels:
+        raise ValueError("wrong number of color components")
+    return struct.pack("<" + "f" * channels, *values)
+
+
 def new(mode: str, size: tuple[int, int], color: str | float | tuple[float, ...] | None = 0) -> Image:
     """Create a supported-mode image filled with color.
 
@@ -3677,17 +3691,8 @@ def new(mode: str, size: tuple[int, int], color: str | float | tuple[float, ...]
         else:
             pixel = (value & 0xFFFF).to_bytes(2, sys.byteorder if mode == "I;16N" else "big" if mode == "I;16B" else "little")
         return Image(image_new(mode, dimensions, pixel))
-    if mode == "F":
-        if isinstance(color, tuple) and len(color) == 1:
-            color = color[0]
-        value = 0.0 if color is None else float(cast("FloatInput", color))
-        return Image(image_new(mode, dimensions, struct.pack("<f", value)))
-    if mode in ("RGB;F", "RGBA;F"):
-        channels = 3 if mode == "RGB;F" else 4
-        values = (0.0,) * channels if color is None else color if isinstance(color, tuple) else (float(color),) * channels
-        if len(values) != channels:
-            raise ValueError("wrong number of color components")
-        return Image(image_new(mode, dimensions, struct.pack("<" + "f" * channels, *values)))
+    if mode in ("F", "RGB;F", "RGBA;F"):
+        return Image(image_new(mode, dimensions, _float_pixel(mode, color)))
     native_mode = "L" if mode == "P" else mode
     if mode not in ("1", "L", "LA", "La", "RGB", "RGBA", "RGBa", "RGBX", "P", "PA", "HSV", "CMYK", "YCbCr", "LAB"):
         raise ValueError(f"unsupported image mode {mode!r}")
