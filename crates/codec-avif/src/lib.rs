@@ -3,6 +3,7 @@ use blanket_codec_image::{color_type, decode_rust_image};
 use blanket_core::parallel::{deterministic, with_rayon_worker_limit};
 use blanket_core::{Image, PixelMode};
 use image::{ExtendedColorType, ImageEncoder, ImageFormat as RustFormat};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 pub fn decode_avif(data: &[u8]) -> Result<Image, DecodeError> {
@@ -114,6 +115,10 @@ fn sequence_dimensions(data: &[u8]) -> Result<(u32, u32), String> {
 }
 
 pub fn encode_avif(image: &Image, pixels: &[u8], options: SaveOptions) -> PyResult<Vec<u8>> {
+    if !(1..=10).contains(&options.effort) {
+        return Err(PyValueError::new_err("AVIF effort must be between 1 and 10"));
+    }
+    let speed = 11 - options.effort;
     let rgb;
     let (pixels, color) = if image.pixel_mode() == PixelMode::L {
         rgb = blanket_convert_kernels::simd::convert(pixels, PixelMode::L, PixelMode::Rgb);
@@ -123,7 +128,7 @@ pub fn encode_avif(image: &Image, pixels: &[u8], options: SaveOptions) -> PyResu
     };
     let mut output = Vec::new();
     with_rayon_worker_limit(|| {
-        image::codecs::avif::AvifEncoder::new_with_speed_quality(&mut output, 11 - options.effort, options.quality)
+        image::codecs::avif::AvifEncoder::new_with_speed_quality(&mut output, speed, options.quality)
             .with_num_threads(deterministic().then_some(1))
             .write_image(pixels, image.width(), image.height(), color)
     })
@@ -135,6 +140,16 @@ pub fn encode_avif(image: &Image, pixels: &[u8], options: SaveOptions) -> PyResu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn avif_rejects_effort_outside_speed_range() {
+        Python::initialize();
+        let image = Image::from_pixels(1, 1, PixelMode::Rgb, vec![0; 3], None).unwrap();
+        for effort in [0, 11, u8::MAX] {
+            let error = encode_avif(&image, image.pixel_data().unwrap(), SaveOptions { effort, ..Default::default() }).unwrap_err();
+            assert!(error.to_string().contains("effort must be between 1 and 10"));
+        }
+    }
 
     fn packed(fields: &[(u32, u8)]) -> Vec<u8> {
         let mut bits = Vec::new();

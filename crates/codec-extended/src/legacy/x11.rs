@@ -72,6 +72,9 @@ pub(super) fn encode_xbm(im: &Image, pixels: &[u8]) -> Result<Vec<u8>, String> {
     if im.pixel_mode() != PixelMode::One {
         return Err("XBM requires mode 1".into());
     }
+    if im.width() == 0 || im.height() == 0 {
+        return Err("cannot encode an empty XBM image".into());
+    }
     let mut out = format!("#define im_width {}\n#define im_height {}\nstatic char im_bits[] = {{\n", im.width(), im.height()).into_bytes();
     let packed = blanket_core::raster::pack_bilevel(pixels, im.width() as usize, im.height() as usize);
     out.reserve(packed.len() * 5 + im.height() as usize + 3);
@@ -264,6 +267,14 @@ pub(super) fn encode_xpm(im: &Image, pixels: &[u8]) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn xbm_rejects_empty_images() {
+        for (width, height) in [(0, 0), (0, 1), (1, 0)] {
+            let image = Image::from_pixels(width, height, PixelMode::One, Vec::new(), None).unwrap();
+            assert_eq!(encode_xbm(&image, &[]).unwrap_err(), "cannot encode an empty XBM image");
+        }
+    }
 
     #[test]
     fn string_spans_preserve_escapes_and_borrow_unescaped_values() {
