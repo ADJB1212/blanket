@@ -112,6 +112,7 @@ memchr = {version = "2", default-features = false, features = ["std", "alloc"] }
 
 [patch.crates-io]
 lcms2-sys = { path = "third-party/lcms2-sys" }
+lcms2 = { path = "third-party/lcms2" }
 dav1d-sys = { path = "third-party/dav1d-sys" }
 libheif-sys = { path = "third-party/libheif-sys" }
 jpegxl-sys = { path = "third-party/jpegxl-sys" }

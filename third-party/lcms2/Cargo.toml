@@ -1,0 +1,32 @@
+[package]
+edition = "2024"
+name = "lcms2"
+version = "6.3.0"
+authors = ["Kornel Lesiński <kornel@geekhood.net>"]
+rust-version = "1.98"
+build = false
+autolib = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
+publish = false
+description = "ICC color profile handling. Rusty wrapper for Little CMS"
+homepage = "https://lib.rs/crates/lcms2"
+documentation = "https://docs.rs/lcms2"
+keywords = ["icc", "profile", "color", "lcms"]
+categories = ["multimedia::images", "api-bindings"]
+license = "MIT"
+repository = "https://github.com/kornelski/rust-lcms2.git"
+
+[features]
+static = ["lcms2-sys/static"]
+
+[lib]
+name = "lcms2"
+path = "src/lib.rs"
+
+[dependencies]
+bytemuck = { version = "1", default-features = false, features = ["min_const_generics", "align_offset", "nightly_stdsimd", "nightly_float", "aarch64_simd", "avx512_simd"] }
+foreign-types = { version = "0.5", default-features = false, features = ["std"] }
+lcms2-sys = "4"

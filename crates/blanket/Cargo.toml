@@ -43,6 +43,7 @@ default = ["no-vendored-webp"]
 jxl-vendored = ["blanket-codecs/jxl-vendored"]
 embedded-libheif = ["blanket-codecs/embedded-libheif"]
 no-vendored-webp = ["blanket-codecs/no-vendored-webp"]
+static-lcms2 = ["blanket-cms/static-lcms2"]
 
 [build-dependencies]
 toml = { version = "1", default-features = false, features = ["parse", "serde", "std"] }

@@ -15,6 +15,7 @@ pyo3.workspace = true
 
 [features]
 default = []
+static-lcms2 = ["lcms2/static"]
 
 [lib]
 doctest = false
