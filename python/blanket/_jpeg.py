@@ -156,7 +156,8 @@ def sanitize_jpeg(data: bytes) -> tuple[bytes, bool]:
         return cleaned, False
     end = len(cleaned)
     while end and cleaned[end - 1] in (0, 255):
-        end -= 1
+        start = max(0, end - 4096)
+        end = start + len(cleaned[start:end].rstrip(b"\x00\xff"))
     truncated = not cleaned.endswith(b"\xd9", 0, end)
     return cleaned, truncated
 
