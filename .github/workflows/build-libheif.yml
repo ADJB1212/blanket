@@ -106,8 +106,8 @@ jobs:
         run: |
           echo "PKG_CONFIG_PATH=$HOME/deps/aom/lib/pkgconfig:$HOME/deps/x265/lib/pkgconfig:$HOME/deps/libde265/lib/pkgconfig:$HOME/deps/dav1d/lib/pkgconfig" >> "$GITHUB_ENV"
           echo "CMAKE_PREFIX_PATH=$HOME/deps/aom:$HOME/deps/x265:$HOME/deps/libde265:$HOME/deps/dav1d" >> "$GITHUB_ENV"
-          echo "LD_LIBRARY_PATH=$HOME/deps/aom/lib:$HOME/deps/x265/lib:$HOME/deps/libde265/lib:$HOME/deps/dav1d/lib" >> "$GITHUB_ENV"
-          echo "DYLD_LIBRARY_PATH=$HOME/deps/aom/lib:$HOME/deps/x265/lib:$HOME/deps/libde265/lib:$HOME/deps/dav1d/lib" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$HOME/deps/x265/lib:$HOME/deps/dav1d/lib" >> "$GITHUB_ENV"
+          echo "DYLD_LIBRARY_PATH=$HOME/deps/x265/lib:$HOME/deps/dav1d/lib" >> "$GITHUB_ENV"
       - name: Build libheif
         if: steps.cache.outputs.cache-hit != 'true'
         shell: bash

@@ -101,16 +101,23 @@ dav1d)
 aom)
 	cmake -S "$source_dir" -B "$source_dir/build" -G Ninja \
 		-DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$prefix" \
-		-DCMAKE_INSTALL_LIBDIR=lib -DBUILD_SHARED_LIBS=ON \
+		-DCMAKE_INSTALL_LIBDIR=lib -DBUILD_SHARED_LIBS=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
 		-DENABLE_TESTS=OFF -DENABLE_EXAMPLES=OFF -DENABLE_DOCS=OFF
 	;;
 libde265)
 	cmake -S "$source_dir" -B "$source_dir/build" -G Ninja \
 		-DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$prefix" \
-		-DCMAKE_INSTALL_LIBDIR=lib -DENABLE_DECODER=OFF \
-		-DENABLE_SDL=OFF -DENABLE_SHERLOCK265=OFF
+		-DCMAKE_INSTALL_LIBDIR=lib -DBUILD_SHARED_LIBS=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+		-DENABLE_DECODER=OFF -DENABLE_SDL=OFF -DENABLE_SHERLOCK265=OFF
 	;;
 libheif)
+	for archive in "$HOME/deps/libde265/lib/libde265.a" "$HOME/deps/aom/lib/libaom.a"; do
+		test -s "$archive"
+	done
+	libheif_link_flags=()
+	if [[ $RUNNER_OS == Linux ]]; then
+		libheif_link_flags=(-DCMAKE_SHARED_LINKER_FLAGS="${LDFLAGS:-} -Wl,--no-undefined")
+	fi
 	cmake --preset=release-noplugins -S "$source_dir" -B "$source_dir/build" -G Ninja \
 		-DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$prefix" \
 		-DCMAKE_INSTALL_LIBDIR=lib -DWITH_DAV1D=ON -DBUILD_SHARED_LIBS=ON \
@@ -120,13 +127,13 @@ libheif)
 		-DWITH_EXAMPLE_HEIF_THUMB=OFF -DWITH_EXAMPLE_HEIF_VIEW=OFF \
 		-DWITH_GDK_PIXBUF=OFF \
 		-DLIBDE265_INCLUDE_DIR="$HOME/deps/libde265/include" \
-		-DLIBDE265_LIBRARY="$HOME/deps/libde265/lib/libde265.$shared_ext" \
+		-DLIBDE265_LIBRARY="$HOME/deps/libde265/lib/libde265.a" \
 		-DX265_INCLUDE_DIR="$HOME/deps/x265/include" \
 		-DX265_LIBRARY="$HOME/deps/x265/lib/libx265.$shared_ext" \
 		-DDAV1D_INCLUDE_DIR="$HOME/deps/dav1d/include" \
 		-DDAV1D_LIBRARY="$HOME/deps/dav1d/lib/libdav1d.$shared_ext" \
 		-DAOM_INCLUDE_DIR="$HOME/deps/aom/include" \
-		-DAOM_LIBRARY="$HOME/deps/aom/lib/libaom.$shared_ext"
+		-DAOM_LIBRARY="$HOME/deps/aom/lib/libaom.a" "${libheif_link_flags[@]}"
 	;;
 libwebp)
 	cmake -S "$source_dir" -B "$source_dir/build" -G Ninja \
@@ -164,6 +171,18 @@ esac
 
 cmake --build "$source_dir/build" --parallel
 cmake --install "$source_dir/build" --strip
+if [[ $name == libheif ]]; then
+	if [[ $RUNNER_OS == macOS ]]; then
+		dependencies=$(otool -L "$prefix/lib/libheif.dylib")
+	else
+		dependencies=$(readelf -d "$prefix/lib/libheif.so")
+	fi
+	if [[ $dependencies =~ lib(aom|de265)[.-] ]]; then
+		echo "libheif still links dynamically to aom or libde265:" >&2
+		printf '%s\n' "$dependencies" >&2
+		exit 1
+	fi
+fi
 if [[ $name == libwebp ]]; then
 	PKG_CONFIG_PATH="$prefix/lib/pkgconfig" pkg-config --exists libwebp libwebpmux libwebpdemux
 fi

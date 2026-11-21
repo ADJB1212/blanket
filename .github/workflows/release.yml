@@ -249,8 +249,8 @@ jobs:
         run: |
           echo "PKG_CONFIG_PATH=$HOME/deps/dav1d/lib/pkgconfig:$HOME/deps/aom/lib/pkgconfig:$HOME/deps/x265/lib/pkgconfig:$HOME/deps/libde265/lib/pkgconfig:$HOME/deps/libheif/lib/pkgconfig:$HOME/deps/libwebp/lib/pkgconfig:$HOME/deps/libjxl/lib/pkgconfig" >> "$GITHUB_ENV"
           echo "CMAKE_PREFIX_PATH=$HOME/deps/dav1d:$HOME/deps/aom:$HOME/deps/x265:$HOME/deps/libde265:$HOME/deps/libheif:$HOME/deps/libwebp:$HOME/deps/libjxl" >> "$GITHUB_ENV"
-          echo "LD_LIBRARY_PATH=$HOME/deps/dav1d/lib:$HOME/deps/aom/lib:$HOME/deps/x265/lib:$HOME/deps/libde265/lib:$HOME/deps/libheif/lib:$HOME/deps/libwebp/lib:$HOME/deps/libjxl/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
-          echo "DYLD_LIBRARY_PATH=$HOME/deps/dav1d/lib:$HOME/deps/aom/lib:$HOME/deps/x265/lib:$HOME/deps/libde265/lib:$HOME/deps/libheif/lib:$HOME/deps/libwebp/lib:$HOME/deps/libjxl/lib" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$HOME/deps/dav1d/lib:$HOME/deps/x265/lib:$HOME/deps/libheif/lib:$HOME/deps/libwebp/lib:$HOME/deps/libjxl/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+          echo "DYLD_LIBRARY_PATH=$HOME/deps/dav1d/lib:$HOME/deps/x265/lib:$HOME/deps/libheif/lib:$HOME/deps/libwebp/lib:$HOME/deps/libjxl/lib" >> "$GITHUB_ENV"
       - name: Verify codec versions
         run: |
           pkg-config --modversion dav1d
@@ -405,8 +405,8 @@ jobs:
         run: |
           echo "PKG_CONFIG_PATH=$HOME/deps/dav1d/lib/pkgconfig:$HOME/deps/aom/lib/pkgconfig:$HOME/deps/x265/lib/pkgconfig:$HOME/deps/libde265/lib/pkgconfig:$HOME/deps/libheif/lib/pkgconfig:$HOME/deps/libwebp/lib/pkgconfig:$HOME/deps/libjxl/lib/pkgconfig" >> "$GITHUB_ENV"
           echo "CMAKE_PREFIX_PATH=$HOME/deps/dav1d:$HOME/deps/aom:$HOME/deps/x265:$HOME/deps/libde265:$HOME/deps/libheif:$HOME/deps/libwebp:$HOME/deps/libjxl" >> "$GITHUB_ENV"
-          echo "LD_LIBRARY_PATH=$HOME/deps/dav1d/lib:$HOME/deps/aom/lib:$HOME/deps/x265/lib:$HOME/deps/libde265/lib:$HOME/deps/libheif/lib:$HOME/deps/libwebp/lib:$HOME/deps/libjxl/lib" >> "$GITHUB_ENV"
-          echo "DYLD_LIBRARY_PATH=$HOME/deps/dav1d/lib:$HOME/deps/aom/lib:$HOME/deps/x265/lib:$HOME/deps/libde265/lib:$HOME/deps/libheif/lib:$HOME/deps/libwebp/lib:$HOME/deps/libjxl/lib" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$HOME/deps/dav1d/lib:$HOME/deps/x265/lib:$HOME/deps/libheif/lib:$HOME/deps/libwebp/lib:$HOME/deps/libjxl/lib" >> "$GITHUB_ENV"
+          echo "DYLD_LIBRARY_PATH=$HOME/deps/dav1d/lib:$HOME/deps/x265/lib:$HOME/deps/libheif/lib:$HOME/deps/libwebp/lib:$HOME/deps/libjxl/lib" >> "$GITHUB_ENV"
       - name: Verify codec versions
         run: |
           pkg-config --modversion dav1d
