@@ -60,6 +60,9 @@ fn ops_smart_crop(py: Python<'_>, image: &Image, fractions: (f64, f64)) -> PyRes
 }
 
 fn placement(pixels: &[u8], width: usize, height: usize, fractions: (f64, f64)) -> (f64, f64) {
+    if blanket_kernels::ops::constant_pixel::<4>(pixels).is_some() {
+        return (0.5, 0.5);
+    }
     let mut mean = [0.0; 3];
     let mut alpha_sum = 0.0;
     for pixel in pixels.as_chunks::<4>().0 {
