@@ -44,7 +44,7 @@ impl Decoder {
     fn complete(&self) -> bool {
         match self {
             Self::Jxl(decoder) => decoder.is_complete(),
-            Self::Jpeg(decoder) => decoder.complete,
+            Self::Jpeg(decoder) => decoder.is_complete(),
         }
     }
 

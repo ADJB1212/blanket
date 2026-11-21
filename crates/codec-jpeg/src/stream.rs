@@ -55,7 +55,7 @@ pub struct JpegStreamDecoder {
     completed_color: (bool, Option<u8>) = (false, None),
     pixels: Option<Image> = None,
     failed: bool = false,
-    pub complete: bool = false,
+    complete: bool = false,
 }
 
 impl std::fmt::Debug for JpegStreamDecoder {
@@ -70,6 +70,12 @@ impl std::fmt::Debug for JpegStreamDecoder {
 }
 
 impl JpegStreamDecoder {
+    /// Whether the decoder has reached the end-of-image marker.
+    #[must_use]
+    pub fn is_complete(&self) -> bool {
+        self.complete
+    }
+
     pub fn new() -> Result<Self, String> {
         let mut input = Vec::new();
         input.try_reserve_exact(INPUT_LIMIT).map_err(|error| format!("JPEG streaming input memory limit exceeded: {error}"))?;
@@ -512,6 +518,9 @@ impl JpegStreamDecoder {
     }
 
     pub fn finish(mut self) -> Result<Option<Image>, String> {
+        if !self.complete {
+            return Err("incomplete JPEG image".into());
+        }
         if self.seen_scan && self.pixels.is_none() {
             self.render()?;
         }
@@ -531,6 +540,15 @@ mod tests {
         let pixels = (0..33 * 19 * mode.channels()).map(|i| (i * 71 + i / 7) as u8).collect();
         let image = Image::from_pixels(33, 19, mode, pixels, None).unwrap();
         encode_jpeg_variant(&image, SaveOptions { .. }, JpegCoding { progressive, .. }).unwrap()
+    }
+
+    #[test]
+    fn finish_requires_end_of_image() {
+        let data = encoded(PixelMode::L, false);
+        let mut decoder = JpegStreamDecoder::new().unwrap();
+        decoder.feed(&data[..data.len() - 2]).unwrap();
+        assert!(!decoder.is_complete());
+        assert_eq!(decoder.finish().unwrap_err(), "incomplete JPEG image");
     }
 
     #[test]
@@ -554,7 +572,7 @@ mod tests {
                 let result = data.chunks(size).try_for_each(|chunk| decoder.feed(chunk));
                 assert_eq!(result.is_ok(), extra.is_empty(), "extra={extra:?}, chunk={size}");
                 if result.is_ok() {
-                    assert!(decoder.complete);
+                    assert!(decoder.is_complete());
                 }
             }
         }
@@ -573,11 +591,11 @@ mod tests {
                         decoder.feed(chunk).unwrap();
                         assert!(decoder.input.len() <= INPUT_LIMIT);
                         assert!(decoder.input.capacity() <= INPUT_LIMIT);
-                        if !decoder.complete && preview.is_none() {
+                        if !decoder.is_complete() && preview.is_none() {
                             preview = decoder.image().unwrap();
                         }
                     }
-                    assert!(decoder.complete);
+                    assert!(decoder.is_complete());
                     assert!(
                         decoder.image().unwrap().unwrap().pixel_data().unwrap() == expected.pixel_data().unwrap(),
                         "{mode:?}, progressive={progressive}, chunk={chunk_size}"
@@ -604,7 +622,7 @@ mod tests {
             assert!(decoder.input.capacity() <= INPUT_LIMIT);
         }
         decoder.feed(&data[2..]).unwrap();
-        assert!(decoder.complete);
+        assert!(decoder.is_complete());
         decoder.feed(&vec![0; 1 << 20]).unwrap();
         assert_eq!(decoder.input.capacity(), 0);
         assert_eq!(decoder.image().unwrap().unwrap().pixel_data().unwrap(), decode_jpeg(&data).unwrap().pixel_data().unwrap());
@@ -639,7 +657,7 @@ mod tests {
                 decoder.feed(chunk).unwrap();
                 assert!(decoder.input.capacity() <= INPUT_LIMIT);
             }
-            assert!(decoder.complete);
+            assert!(decoder.is_complete());
             assert!(decoder.image().unwrap().unwrap().pixel_data().unwrap() == decode_jpeg(&data).unwrap().pixel_data().unwrap());
         }
     }
@@ -666,7 +684,7 @@ mod tests {
             for chunk in data.chunks(7) {
                 decoder.feed(chunk).unwrap();
             }
-            assert!(decoder.complete);
+            assert!(decoder.is_complete());
             assert!(decoder.image().unwrap().unwrap().pixel_data().unwrap() == decode_jpeg(&data).unwrap().pixel_data().unwrap());
         }
     }
@@ -694,7 +712,7 @@ mod tests {
                     checked = true;
                     checks += 1;
                     delayed.feed(&data[offset + 1..]).unwrap();
-                    assert!(delayed.complete);
+                    assert!(delayed.is_complete());
                     assert_eq!(delayed.image().unwrap().unwrap().pixel_data().unwrap(), decode_jpeg(&data).unwrap().pixel_data().unwrap());
                 }
             }
