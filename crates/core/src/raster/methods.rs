@@ -10,7 +10,7 @@ use super::pixels::{
     byte_pixel_data, float_value, integer_bytes, integer_value, packed_pixel_data, parse_pixel, pixel_sequence, put_pixels, put_sample_pixel,
     wide_pixel_data,
 };
-use super::queries::{bounding_box_l, bounding_box_packed, count_colors, count_colors_map, extrema, sample_extrema};
+use super::queries::{bounding_box_l, bounding_box_packed, count_colors, count_colors_map, extrema, integer_extrema, sample_extrema};
 use super::validation::expected_len;
 use super::{Image, PixelMode};
 
@@ -67,11 +67,7 @@ impl Image {
             return Ok(Some((lo, hi).into_pyobject(py)?.into_any().unbind()));
         }
         let mode = self.mode;
-        let (lo, hi) = py.detach(|| {
-            data.chunks_exact(mode.sample_bytes())
-                .map(|bytes| integer_value(mode, bytes))
-                .fold((i64::MAX, i64::MIN), |(lo, hi), v| (lo.min(v), hi.max(v)))
-        });
+        let (lo, hi) = py.detach(|| integer_extrema(data, mode));
         Ok(Some((lo, hi).into_pyobject(py)?.into_any().unbind()))
     }
 

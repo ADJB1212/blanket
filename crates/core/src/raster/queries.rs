@@ -156,6 +156,39 @@ pub(super) fn sample_extrema<const C: usize>(data: &[u8], maximum: u16) -> Vec<(
     minimum.into_iter().zip(high).collect()
 }
 
+pub(super) fn integer_extrema(data: &[u8], mode: super::PixelMode) -> (i64, i64) {
+    use std::simd::cmp::SimdOrd;
+    use std::simd::num::{SimdInt, SimdUint};
+    use std::simd::{Simd, ToBytes};
+
+    let (lo, hi, tail) = if mode == super::PixelMode::I {
+        let mut lo = Simd::<i32, 16>::splat(i32::MAX);
+        let mut hi = Simd::<i32, 16>::splat(i32::MIN);
+        let (blocks, tail) = data.as_chunks::<64>();
+        for &block in blocks {
+            let values = Simd::from_le_bytes(Simd::from_array(block));
+            lo = lo.simd_min(values);
+            hi = hi.simd_max(values);
+        }
+        (i64::from(lo.reduce_min()), i64::from(hi.reduce_max()), tail)
+    } else {
+        let mut lo = crate::pixels::Samples::splat(u16::MAX);
+        let mut hi = crate::pixels::Samples::splat(u16::MIN);
+        let (blocks, tail) = data.as_chunks::<32>();
+        let big_endian = mode.is_big_endian();
+        for block in blocks {
+            let values = if big_endian { crate::pixels::load_u16::<true>(block) } else { crate::pixels::load_u16::<false>(block) };
+            lo = lo.simd_min(values);
+            hi = hi.simd_max(values);
+        }
+        (i64::from(lo.reduce_min()), i64::from(hi.reduce_max()), tail)
+    };
+    tail.chunks_exact(mode.sample_bytes()).fold((lo, hi), |(lo, hi), bytes| {
+        let value = super::pixels::integer_value(mode, bytes);
+        (lo.min(value), hi.max(value))
+    })
+}
+
 pub(super) fn count_colors<const N: usize>(data: &[u8], maxcolors: usize) -> Option<ColorCounts> {
     const CHUNK: usize = 128 << 10;
     if maxcolors >= 64 && crate::parallel::should_parallel(data.len() / N, CHUNK, CHUNK * 2) {
