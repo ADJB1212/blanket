@@ -3,7 +3,8 @@ use blanket_core::{Image, PixelMode};
 use pyo3::buffer::PyBuffer;
 use pyo3::exceptions::{PyIndexError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyMemoryView, PySlice, PyTuple};
+use pyo3::sync::critical_section::with_critical_section;
+use pyo3::types::{PyByteArray, PyBytes, PyMemoryView, PySlice, PyTuple};
 use zerocopy::FromBytes;
 
 #[pyfunction(name = "image_tobytes", signature = (source_image, rawmode=None, stride=0, orientation=1))]
@@ -204,34 +205,38 @@ fn array_bytes(obj: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
     if let Ok(bytes) = obj.cast::<PyBytes>() {
         return blanket_core::buffers::copy(bytes.as_bytes());
     }
+    if let Ok(bytes) = obj.cast::<PyByteArray>() {
+        return Ok(bytes.to_vec());
+    }
+    let exporter = if obj.cast_exact::<PyMemoryView>().is_ok() { obj.getattr("obj")? } else { obj.clone() };
     if let Ok(buffer) = PyBuffer::<u8>::get(obj) {
-        if buffer.is_c_contiguous() {
-            let (address, len) = (buffer.buf_ptr() as usize, buffer.len_bytes());
-            // SAFETY: The held buffer export keeps `len` contiguous bytes alive.
-            return obj.py().detach(|| unsafe { blanket_core::buffers::copy_from_ptr(address as *const u8, len) });
-        }
-        if let Some((rows, row_bytes)) = contiguous_inner_rows(&buffer) {
-            return copy_buffer_rows(obj.py(), &buffer, rows, row_bytes);
-        }
-        return buffer.to_vec(obj.py());
+        return with_critical_section(&exporter, || {
+            if !buffer.is_c_contiguous()
+                && let Some((rows, row_bytes)) = contiguous_inner_rows(&buffer)
+            {
+                return copy_buffer_rows(obj.py(), &buffer, rows, row_bytes);
+            }
+            buffer.to_vec(obj.py())
+        });
     }
     if let Ok(view) = PyMemoryView::from(obj) {
         if let Ok(raw) = view.call_method1("cast", ("B",)) {
-            return PyBuffer::<u8>::get(&raw)?.to_vec(obj.py());
+            let buffer = PyBuffer::<u8>::get(&raw)?;
+            return with_critical_section(&exporter, || buffer.to_vec(obj.py()));
         }
         macro_rules! copy_typed {
             ($($sample:ty),+ $(,)?) => {
                 $(if let Ok(buffer) = PyBuffer::<$sample>::get(obj) {
                     let mut pixels = alloc_pixels(buffer.len_bytes())?;
                     if let Ok(values) = <[$sample]>::mut_from_bytes(&mut pixels) {
-                        buffer.copy_to_slice(obj.py(), values)?;
+                        with_critical_section(&exporter, || buffer.copy_to_slice(obj.py(), values))?;
                         return Ok(pixels);
                     }
                 })+
             };
         }
         copy_typed!(u16, i32, f32, f64);
-        let bytes = view.call_method0("tobytes")?;
+        let bytes = with_critical_section(&exporter, || view.call_method0("tobytes"))?;
         return blanket_core::buffers::copy(bytes.cast::<PyBytes>()?.as_bytes());
     }
     let bytes = obj.call_method0("tobytes")?;

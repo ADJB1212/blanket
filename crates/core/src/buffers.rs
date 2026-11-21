@@ -39,23 +39,6 @@ pub fn copy<T: Copy + Send + Sync>(source: &[T]) -> PyResult<Vec<T>> {
     Ok(result)
 }
 
-/// Copy foreign memory, such as a Python buffer, with `memcpy` semantics.
-///
-/// # Safety
-/// `source` must be valid for reads of `len` bytes for the duration of the call.
-pub unsafe fn copy_from_ptr(source: *const u8, len: usize) -> PyResult<Vec<u8>> {
-    let mut result = reserved::<u8>(len)?;
-    let address = source as usize;
-    chunks_mut_above(&mut result.spare_capacity_mut()[..len], COPY_CHUNK_BYTES, COPY_PARALLEL_BYTES, |i, dst| {
-        // SAFETY: The caller guarantees the source range; chunks are disjoint
-        // and in bounds of both buffers. No shared slice of foreign memory is formed.
-        unsafe { std::ptr::copy_nonoverlapping((address + i * COPY_CHUNK_BYTES) as *const u8, dst.as_mut_ptr().cast::<u8>(), dst.len()) };
-    });
-    // SAFETY: Every byte was initialized above.
-    unsafe { result.set_len(len) };
-    Ok(result)
-}
-
 pub fn output(image: &Image, size: (u32, u32), pixels: Vec<u8>) -> PyResult<Image> {
     if image.mode.is_float() {
         return Image::from_color_float_bytes(size.0, size.1, image.mode, pixels);
