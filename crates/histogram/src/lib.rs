@@ -39,9 +39,8 @@ fn sample_histogram<const N: usize>(
 ) -> PyResult<Vec<u64>> {
     let channels = mode.channels();
     let samples = raw.as_chunks::<N>().0;
-    let mut bins = vec![0_u64; channels << 8];
     if samples.is_empty() {
-        return Ok(bins);
+        return Ok(vec![0; channels << 8]);
     }
     let (low, high) = extrema.unwrap_or_else(|| {
         samples.iter().map(&sample).filter(|v| v.is_finite()).fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| (lo.min(v), hi.max(v)))
@@ -50,8 +49,26 @@ fn sample_histogram<const N: usize>(
         return Err(PyValueError::new_err("invalid extrema"));
     }
     if high == low {
+        return Ok(vec![0; channels << 8]);
+    }
+    if N == 2 && samples.len() >= 512 * 1024 {
+        // Keep truncation and floating-point operation order identical to the per-sample path.
+        let table: Vec<u16> = (0..=u16::MAX)
+            .map(|value| {
+                let slot = ((f64::from(value) - low) * 255.0 / (high - low)).trunc() as i64;
+                if (0..256).contains(&slot) { slot as u16 } else { 256 }
+            })
+            .collect();
+        let bins = match channels {
+            1 => lookup_histogram::<1, N>(samples, mask, &table, &sample),
+            2 => lookup_histogram::<2, N>(samples, mask, &table, &sample),
+            3 => lookup_histogram::<3, N>(samples, mask, &table, &sample),
+            4 => lookup_histogram::<4, N>(samples, mask, &table, &sample),
+            _ => unreachable!("validated wide histogram channels"),
+        };
         return Ok(bins);
     }
+    let mut bins = vec![0_u64; channels << 8];
     let scale = match mode {
         PixelMode::I => 255.0 / (high as i32).wrapping_sub(low as i32) as f32,
         PixelMode::F | PixelMode::RgbF | PixelMode::RgbaF => {
@@ -82,6 +99,20 @@ fn sample_histogram<const N: usize>(
         }
     }
     Ok(bins)
+}
+
+fn lookup_histogram<const C: usize, const N: usize>(
+    samples: &[[u8; N]], mask: Option<&[u8]>, table: &[u16], sample: impl Fn(&[u8; N]) -> f64,
+) -> Vec<u64> {
+    let mut bins = [[0; 257]; C];
+    for (i, pixel) in samples.as_chunks::<C>().0.iter().enumerate() {
+        if mask.is_none_or(|mask| mask[i] != 0) {
+            for c in 0..C {
+                bins[c][usize::from(table[sample(&pixel[c]) as usize])] += 1;
+            }
+        }
+    }
+    bins.into_iter().flat_map(|band| band.into_iter().take(256)).collect()
 }
 
 #[pyfunction(signature = (image, mask=None))]
@@ -178,6 +209,31 @@ fn grayscale_histogram(source: &[u8]) -> [u64; 256] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wide_lookup_matches_scalar_for_masks_and_fractional_extrema() {
+        let values: Vec<_> = (0..180_001_u32).flat_map(|i| [i as u16, (i * 19) as u16, (i * 247) as u16]).collect();
+        let mask: Vec<_> = (0..180_001).map(|i| u8::from(i % 3 != 0)).collect();
+        let (low, high) = (1000.25, 60_000.75);
+        for mask in [None, Some(mask.as_slice())] {
+            let mut expected = vec![0; 768];
+            for (i, pixel) in values.as_chunks::<3>().0.iter().enumerate() {
+                if mask.is_none_or(|mask| mask[i] != 0) {
+                    for (c, &value) in pixel.iter().enumerate() {
+                        let slot = ((f64::from(value) - low) * 255.0 / (high - low)).trunc() as i64;
+                        if (0..256).contains(&slot) {
+                            expected[c * 256 + slot as usize] += 1;
+                        }
+                    }
+                }
+            }
+            let raw: Vec<_> = values.iter().flat_map(|value| value.to_le_bytes()).collect();
+            assert_eq!(
+                sample_histogram(&raw, PixelMode::Rgb, mask, Some((low, high)), |bytes| f64::from(u16::from_le_bytes(*bytes))).unwrap(),
+                expected,
+            );
+        }
+    }
 
     #[test]
     fn color_float_histogram_decodes_samples_and_applies_pixel_masks() {
