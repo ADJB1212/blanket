@@ -211,6 +211,15 @@ def test_frombytes_honors_custom_bytes_on_buffer_objects() -> None:
     assert image.getpixel((0, 0)) == (16, 32, 48)
 
 
+@pytest.mark.parametrize("step", [-1, 2])
+def test_strided_rows_snapshot_in_logical_order(step: int) -> None:
+    values = np.arange(9 * 71 * 3, dtype=np.uint8).reshape(9, 71, 3)[::step]
+    expected = values.tobytes()
+    images = (Image.frombytes("RGB", (71, len(values)), values), Image.fromarray(values))
+    values.fill(0)
+    assert all(image.tobytes() == expected for image in images)
+
+
 @pytest.mark.parametrize(
     "args,error",
     [

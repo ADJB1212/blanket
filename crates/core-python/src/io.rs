@@ -209,6 +209,9 @@ fn array_bytes(obj: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
             // SAFETY: The held buffer export keeps `len` contiguous bytes alive.
             return obj.py().detach(|| unsafe { blanket_core::buffers::copy_from_ptr(address as *const u8, len) });
         }
+        if let Some((rows, row_bytes)) = contiguous_inner_rows(&buffer) {
+            return copy_buffer_rows(obj.py(), &buffer, rows, row_bytes);
+        }
         return buffer.to_vec(obj.py());
     }
     if let Ok(view) = PyMemoryView::from(obj) {
@@ -234,6 +237,51 @@ fn array_bytes(obj: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
     }
     let bytes = obj.call_method0("tobytes")?;
     blanket_core::buffers::copy(bytes.cast::<PyBytes>()?.as_bytes())
+}
+
+fn contiguous_inner_rows(buffer: &PyBuffer<u8>) -> Option<(usize, usize)> {
+    let (&rows, order) = buffer.shape().split_first()?;
+    if rows == 0 || order.is_empty() || buffer.suboffsets().is_some() {
+        return None;
+    }
+    let row_bytes = order.iter().zip(&buffer.strides()[1..]).rev().try_fold(1_usize, |bytes, (&extent, &stride)| {
+        if extent > 1 && usize::try_from(stride).ok()? != bytes {
+            return None;
+        }
+        bytes.checked_mul(extent)
+    })?;
+    (row_bytes >= 128 && rows.checked_mul(row_bytes)? == buffer.len_bytes()).then_some((rows, row_bytes))
+}
+
+fn copy_buffer_rows(py: Python<'_>, buffer: &PyBuffer<u8>, rows: usize, row_bytes: usize) -> PyResult<Vec<u8>> {
+    let len = buffer.len_bytes();
+    let mut pixels = blanket_core::buffers::reserved::<u8>(len)?;
+    let mut extent = row_bytes as isize;
+    let mut stride = 1;
+    let mut row = pyo3::ffi::Py_buffer {
+        len: extent,
+        itemsize: 1,
+        ndim: 1,
+        shape: &raw mut extent,
+        strides: &raw mut stride,
+        format: c"B".as_ptr().cast_mut(),
+        ..pyo3::ffi::Py_buffer::new()
+    };
+    let mut indices = vec![0; buffer.dimensions()];
+    for i in 0..rows {
+        indices[0] = i;
+        row.buf = buffer.get_ptr(&indices);
+        // SAFETY: The parent export retains this contiguous row. Its disjoint destination is within reserved storage.
+        let status = unsafe {
+            pyo3::ffi::PyBuffer_ToContiguous(pixels.as_mut_ptr().add(i * row_bytes).cast(), &raw const row, row.len, b'C' as std::ffi::c_char)
+        };
+        if status != 0 {
+            return Err(PyErr::fetch(py));
+        }
+    }
+    // SAFETY: Each row copy initialized all of its destination bytes.
+    unsafe { pixels.set_len(len) };
+    Ok(pixels)
 }
 
 #[pyfunction(signature = (obj, mode = None, bit_depth = None, interface = None))]
