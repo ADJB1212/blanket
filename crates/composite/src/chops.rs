@@ -47,9 +47,9 @@ fn difference_bbox(
         let end = (x1 as usize).min(width) * channels;
         (start..end, y0 as usize..y1 as usize)
     });
+    let rows = |y: usize| (&a[y * a_size.0 as usize * channels..][..width * channels], &b[y * b_size.0 as usize * channels..][..width * channels]);
     for y in 0..height {
-        let a = &a[y * a_size.0 as usize * channels..][..width * channels];
-        let b = &b[y * b_size.0 as usize * channels..][..width * channels];
+        let (a, b) = rows(y);
         if let Some((columns, rows)) = &clear
             && rows.contains(&y)
             && !columns.is_empty()
@@ -90,6 +90,16 @@ fn difference_bbox(
         let suffix = right * channels;
         if let Some(x) = difference_position::<true>(&a[suffix..], &b[suffix..]) {
             right += x / channels + 1;
+        }
+        if left == 0 && right == width && clear.is_none() {
+            // Only the bottom edge can still expand.
+            if let Some(last) = (y + 1..height).rfind(|&row| {
+                let (a, b) = rows(row);
+                a != b
+            }) {
+                bottom = last + 1;
+            }
+            break;
         }
     }
     (bottom != 0).then_some((left, top, right, bottom))
@@ -552,6 +562,19 @@ fn chops_offset(py: Python<'_>, image: &Image, xoffset: i64, yoffset: i64) -> Py
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn full_width_difference_searches_remaining_rows_from_the_bottom() {
+        let first = [0; 30];
+        let mut second = [0; 35];
+        second[7] = 1;
+        second[7 + 5] = 1;
+        second[21 + 2] = 1;
+        second[34] = 1;
+        assert_eq!(difference_bbox(&first, &second, (6, 5), (7, 5), 1, None), Some((0, 1, 6, 4)));
+        second[21 + 2] = 0;
+        assert_eq!(difference_bbox(&first, &second, (6, 5), (7, 5), 1, None), Some((0, 1, 6, 2)));
+    }
 
     #[test]
     fn difference_scans_match_scalar_on_unaligned_blocks_and_tails() {
