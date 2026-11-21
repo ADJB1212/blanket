@@ -895,6 +895,24 @@ fn interleave_rgb<T: std::simd::SimdElement>(values: [Simd<T, 16>; 3]) -> [Simd<
 pub type Samples = Simd<u16, 16>;
 
 #[inline]
+pub fn load_word_bytes<const C: usize>(source: &[u8]) -> [Simd<u32, 16>; C] {
+    let load = |offset| Simd::<u32, 16>::from_ne_bytes(Simd::<u8, 64>::from_slice(&source[offset..]));
+    let mut result = [Simd::splat(0); C];
+    match C {
+        3 => result.copy_from_slice(&deinterleave_rgb(load(0), load(64), load(128))),
+        4 => {
+            let (a, b) = load(0).deinterleave(load(64));
+            let (c, d) = load(128).deinterleave(load(192));
+            let (r, blue) = a.deinterleave(c);
+            let (g, alpha) = b.deinterleave(d);
+            result.copy_from_slice(&[r, g, blue, alpha]);
+        }
+        _ => unreachable!("word channels must be 3 or 4"),
+    }
+    result
+}
+
+#[inline]
 pub fn load_sample_bytes<const C: usize>(source: &[u8]) -> [Samples; C] {
     assert!(source.len() >= 32 * C);
     let mut result = [Samples::splat(0); C];

@@ -1,5 +1,7 @@
 //! Pixel primitives used by the Python ImageOps API.
 
+use std::simd::ToBytes;
+
 use blanket_core::buffers::{buffer, copy_rows, output, reserved_buffer};
 use blanket_core::parallel::{CHUNK_PIXELS, MIN_PARALLEL_BYTES, chunks_mut, deterministic_seed, should_parallel};
 use blanket_core::raster::{Image, PixelMode, alloc_pixels};
@@ -115,10 +117,7 @@ fn ops_color_composite(py: Python<'_>, background: &Image, foreground: &Image, s
 
 #[pyfunction]
 fn ops_split(py: Python<'_>, image: &Image) -> PyResult<Vec<Image>> {
-    if matches!(image.pixel_mode(), PixelMode::RgbF | PixelMode::RgbaF) {
-        return (0..image.pixel_mode().channels()).map(|c| image.getchannel(py, c)).collect();
-    }
-    if image.pixel_mode().is_wide_scalar() {
+    if image.pixel_mode().is_wide_scalar() && image.pixel_mode().channels() == 1 {
         return image.copy(py).map(|copy| vec![copy]);
     }
     if image.pixel_mode().channels() == 1 {
@@ -146,7 +145,13 @@ fn ops_split(py: Python<'_>, image: &Image) -> PyResult<Vec<Image>> {
         }
         let split = |offset: usize, red: &mut [u8], green: &mut [u8], blue: &mut [u8], alpha: Option<&mut [u8]>| {
             let src = &source[offset * channels..(offset + red.len()) * channels];
-            if sample_bytes == 2 {
+            if sample_bytes == 4 {
+                if let Some(alpha) = alpha {
+                    split_word_bands(src, [red, green, blue, alpha]);
+                } else {
+                    split_word_bands(src, [red, green, blue]);
+                }
+            } else if sample_bytes == 2 {
                 if let Some(alpha) = alpha {
                     split_sample_bands(src, [red, green, blue, alpha]);
                 } else {
@@ -180,7 +185,9 @@ fn ops_split(py: Python<'_>, image: &Image) -> PyResult<Vec<Image>> {
     bands
         .into_iter()
         .map(|pixels| {
-            if sample_bytes == 2 {
+            if sample_bytes == 4 {
+                Image::from_float_bytes(image.width(), image.height(), pixels)
+            } else if sample_bytes == 2 {
                 Image::from_sample_bytes(image.width(), image.height(), PixelMode::L, pixels, image.bit_depth(), None)
             } else {
                 Image::from_pixels(image.width(), image.height(), PixelMode::L, pixels, None)
@@ -215,6 +222,21 @@ fn split_sample_bands<const C: usize>(source: &[u8], mut bands: [&mut [u8]; C]) 
     for (i, pixel) in source[end * C..].chunks_exact(C * 2).enumerate() {
         for (channel, band) in bands.iter_mut().enumerate() {
             band[end + i * 2..end + i * 2 + 2].copy_from_slice(&pixel[channel * 2..channel * 2 + 2]);
+        }
+    }
+}
+
+fn split_word_bands<const C: usize>(source: &[u8], mut bands: [&mut [u8]; C]) {
+    let end = bands[0].len() / 64 * 64;
+    for offset in (0..end).step_by(64) {
+        let values = blanket_kernels::pixels::load_word_bytes::<C>(&source[offset * C..]);
+        for (band, value) in bands.iter_mut().zip(values) {
+            value.to_ne_bytes().copy_to_slice(&mut band[offset..offset + 64]);
+        }
+    }
+    for (i, pixel) in source[end * C..].chunks_exact(C * 4).enumerate() {
+        for (band, sample) in bands.iter_mut().zip(pixel.as_chunks::<4>().0) {
+            band[end + i * 4..][..4].copy_from_slice(sample);
         }
     }
 }
