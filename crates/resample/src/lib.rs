@@ -537,7 +537,8 @@ fn resize(
             return resize(py, &reduced, size, method, plan.bounds, None, progress);
         }
     }
-    if matches!(image.pixel_mode(), PixelMode::RgbF | PixelMode::RgbaF) {
+    let float_color = matches!(image.pixel_mode(), PixelMode::RgbF | PixelMode::RgbaF);
+    if float_color && (method == 0 || progress.enabled() || image.width() == 0 || image.height() == 0) {
         let mut pixels = buffer(size, image.raw_bytes_per_pixel())?;
         if image.width() == 0 || image.height() == 0 {
             return output(image, size, pixels);
@@ -579,6 +580,15 @@ fn resize(
         let resized = resize(py, &transposed, (size.1, size.0), method, (bounds.1, bounds.0, bounds.3, bounds.2), reducing_gap, progress)?;
         drop(transposed);
         return ops_transpose(py, &resized, 5);
+    }
+    if float_color {
+        return py.detach(|| {
+            if image.pixel_mode() == PixelMode::RgbF {
+                resize_float_color::<3>(image, source, size, b, method, progress)
+            } else {
+                resize_float_color::<4>(image, source, size, b, method, progress)
+            }
+        });
     }
     if image.pixel_mode().is_wide_scalar() {
         return py.detach(|| resize_integer(image, size, b, method, progress));
@@ -659,6 +669,47 @@ fn resize(
         Ok(result)
     })?;
     output(image, size, result)
+}
+
+fn resize_float_color<const C: usize>(
+    image: &Image, source: &[u8], size: (u32, u32), bounds: [f64; 4], method: u8, progress: &Progress,
+) -> PyResult<Image> {
+    let horizontal = normalized_weights(image.width(), size.0, bounds[0], bounds[2], method, |v| v);
+    let vertical = normalized_weights(image.height(), size.1, bounds[1], bounds[3], method, |v| v);
+    let first = vertical.get(0).0;
+    let (last, tail) = vertical.get(size.1 as usize - 1);
+    let row_width = size.0 as usize * C;
+    let count = row_width.checked_mul(last + tail.len() - first).ok_or_else(|| PyMemoryError::new_err("image dimensions are too large"))?;
+    let mut temp = blanket_core::buffers::reserved::<f32>(count)?;
+    temp.resize(count, 0.0);
+    let mut output_pixels = buffer(size, C * 4)?;
+    let source_stride = image.width() as usize * C * 4;
+    resize_tiles(&mut temp, row_width * 16, 256 << 10, progress, |band, chunk| {
+        let vector_rows = chunk.len() / row_width / 4 * 4;
+        for (row, dst) in chunk.chunks_exact_mut(row_width).enumerate() {
+            let start = (first + band * 16 + row) * source_stride;
+            let source = &source[start..][..source_stride];
+            // The scalar band pass initializes its tail sums with negative zero.
+            let initial = if row < vector_rows { 0.0 } else { -0.0 };
+            for ((start, weights), dst) in horizontal.iter().zip(dst.as_chunks_mut::<C>().0) {
+                *dst = ops_simd::horizontal_float_color::<C>(&source[start * C * 4..], weights, initial);
+            }
+        }
+    })?;
+    let vector_samples = size.0 as usize / 4 * 4 * C;
+    resize_tiles(&mut output_pixels, row_width * 4 * 16, 256 << 10, progress, |band, chunk| {
+        for (row, dst) in chunk.chunks_exact_mut(row_width * 4).enumerate() {
+            let (start, weights) = vertical.get(band * 16 + row);
+            let source = &temp[(start - first) * row_width..];
+            let (prefix, tail) = dst.split_at_mut(vector_samples * 4);
+            ops_simd::vertical_float_color(source, prefix, row_width, weights);
+            for (i, sample) in tail.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                let value: f64 = weights.iter().enumerate().map(|(tap, &w)| f64::from(source[tap * row_width + vector_samples + i]) * w).sum();
+                *sample = (value as f32).to_le_bytes();
+            }
+        }
+    })?;
+    output(image, size, output_pixels)
 }
 
 fn nearest_positions(bounds: [f64; 4], size: (u32, u32), src_width: u32, src_height: u32) -> (Vec<usize>, Vec<usize>) {

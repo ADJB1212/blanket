@@ -46,7 +46,7 @@ def test_float_layout_quantization_preserves_channels_and_rounding(source_mode: 
 
 
 @pytest.mark.parametrize("mode,channels", [("RGB;F", 3), ("RGBA;F", 4)])
-@pytest.mark.parametrize("method,target", [(method, (17, 9)) for method in range(8)] + [(Image.Resampling.BOX, (1, 1)), (Image.Resampling.BICUBIC, (257, 65))])
+@pytest.mark.parametrize("method,target", [(method, (17, 9)) for method in range(8)] + [(Image.Resampling.BOX, (1, 1)), (Image.Resampling.BICUBIC, (257, 65)), (Image.Resampling.BICUBIC, (19, 3))])
 def test_float_color_resize_matches_independent_bands(mode: str, channels: int, method: int, target: tuple[int, int]) -> None:
     values = [0.5 if i % channels == 3 else ((i * 17) % 97 - 48) / 13 for i in range(19 * 7 * channels)]
     if method == 0:
@@ -59,6 +59,16 @@ def test_float_color_resize_matches_independent_bands(mode: str, channels: int, 
     expected = b"".join(band[i : i + 4] for i in range(0, target[0] * target[1] * 4, 4) for band in bands)
     assert result.tobytes() == expected
     assert image.tobytes() == raw
+
+
+@pytest.mark.parametrize("mode,channels", [("RGB;F", 3), ("RGBA;F", 4)])
+def test_filtered_float_resize_preserves_signed_zero_in_vector_tails(mode: str, channels: int) -> None:
+    image = Image.new(mode, (19, 7), (-0.0,) * channels)
+    target = (13, 5)
+    method = Image.Resampling.BOX
+    result = image.resize(target, method, premultiply_alpha=False)
+    band = image.getchannel(0).resize(target, method).tobytes()
+    assert result.tobytes() == b"".join(band[i : i + 4] * channels for i in range(0, len(band), 4))
 
 
 @pytest.mark.parametrize("mode,channels", [("RGB;F", 3), ("RGBA;F", 4)])

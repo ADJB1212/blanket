@@ -258,22 +258,48 @@ pub fn horizontal_float_four(source: [&[u8]; 4], weights: &[f64]) -> [f64; 4] {
     sum.to_array()
 }
 
+#[inline]
+pub fn horizontal_float_color<const C: usize>(source: &[u8], weights: &[f64], initial: f64) -> [f32; C] {
+    let mut sum = Simd::<f64, 4>::splat(initial);
+    let pixels = source.as_chunks::<4>().0.as_chunks::<C>().0;
+    for (pixel, &weight) in pixels.iter().zip(weights) {
+        let values = Simd::<f32, 4>::from_array(std::array::from_fn(|c| if c < C { f32::from_le_bytes(pixel[c]) } else { 0.0 }));
+        sum += values.cast::<f64>() * Simd::splat(weight);
+    }
+    let values = sum.cast::<f32>().to_array();
+    std::array::from_fn(|c| values[c])
+}
+
 pub fn vertical_float(source: &[f64], output: &mut [u8], stride: usize, weights: &[f64]) {
-    let count = output.len() / 4;
-    let end = count / 4 * 4;
-    for x in (0..end).step_by(4) {
+    let end = vertical_float_blocks(output, weights, |i, x| Simd::from_slice(&source[i * stride + x..]));
+    for (x, dst) in output.as_chunks_mut::<4>().0.iter_mut().enumerate().skip(end) {
+        let sum: f64 = weights.iter().enumerate().map(|(i, &w)| source[i * stride + x] * w).sum();
+        *dst = (sum as f32).to_le_bytes();
+    }
+}
+
+pub fn vertical_float_color(source: &[f32], output: &mut [u8], stride: usize, weights: &[f64]) {
+    let end = vertical_float_blocks(output, weights, |i, x| Simd::<f32, 4>::from_slice(&source[i * stride + x..]).cast());
+    for (x, dst) in output.as_chunks_mut::<4>().0.iter_mut().enumerate().skip(end) {
+        let sum: f64 = weights.iter().enumerate().map(|(i, &w)| f64::from(source[i * stride + x]) * w).sum();
+        *dst = (sum as f32).to_le_bytes();
+    }
+}
+
+#[inline]
+fn vertical_float_blocks(output: &mut [u8], weights: &[f64], load: impl Fn(usize, usize) -> Simd<f64, 4>) -> usize {
+    let blocks = output.as_chunks_mut::<16>().0;
+    let end = blocks.len() * 4;
+    for (block, dst) in blocks.iter_mut().enumerate() {
         let mut sum = Simd::<f64, 4>::splat(0.0);
         for (i, &weight) in weights.iter().enumerate() {
-            sum += Simd::from_slice(&source[i * stride + x..]) * Simd::splat(weight);
+            sum += load(i, block * 4) * Simd::splat(weight);
         }
-        for (c, v) in sum.cast::<f32>().to_array().iter().enumerate() {
-            output[(x + c) * 4..(x + c + 1) * 4].copy_from_slice(&v.to_le_bytes());
+        for (dst, v) in dst.as_chunks_mut::<4>().0.iter_mut().zip(sum.cast::<f32>().to_array()) {
+            *dst = v.to_le_bytes();
         }
     }
-    for x in end..count {
-        let sum: f64 = weights.iter().enumerate().map(|(i, &w)| source[i * stride + x] * w).sum();
-        output[x * 4..x * 4 + 4].copy_from_slice(&(sum as f32).to_le_bytes());
-    }
+    end
 }
 
 pub fn horizontal_wide_four(source: [&[u8]; 4], weights: &[i32]) -> [f64; 4] {
