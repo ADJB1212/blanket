@@ -194,7 +194,7 @@ mod native {
         }
     }
 
-    fn torch_buffer(tensor: &Bound<'_, PyAny>) -> PyResult<(Descriptor, usize, usize)> {
+    fn torch_buffer(tensor: &Bound<'_, PyAny>) -> PyResult<(Descriptor, bool, usize, usize)> {
         let torch = tensor.py().import("torch")?;
         if !tensor.is_instance(&torch.getattr("Tensor")?)?
             || tensor.getattr("device")?.getattr("type")?.extract::<String>()? != "mps"
@@ -205,18 +205,26 @@ mod native {
             return Err(PyValueError::new_err("Metal exchange requires a contiguous MPS tensor without gradients or negative views"));
         }
         let dtype = tensor.getattr("dtype")?;
-        let float = dtype.is(&torch.getattr("float32")?);
+        let half = dtype.is(&torch.getattr("float16")?);
+        let float = half || dtype.is(&torch.getattr("float32")?);
         if !float && !dtype.is(&torch.getattr("uint8")?) {
-            return Err(PyValueError::new_err("Metal exchange requires uint8 or float32 samples"));
+            return Err(PyValueError::new_err("Metal exchange requires uint8, float16, or float32 samples"));
         }
         let [height, width, channels]: [u32; 3] =
             tensor.getattr("shape")?.extract().map_err(|_| PyValueError::new_err("Metal exchange requires HWC tensor storage"))?;
         let descriptor = Descriptor { width, height, channels, float };
-        let len = descriptor.byte_len().map_err(gpu_value_error)?;
+        let len = descriptor.byte_len().map_err(gpu_value_error)? >> usize::from(half);
+        let sample_bytes = if half {
+            size_of::<u16>()
+        } else if float {
+            size_of::<f32>()
+        } else {
+            1
+        };
         let offset = tensor
             .call_method0("storage_offset")?
             .extract::<usize>()?
-            .checked_mul(if float { size_of::<f32>() } else { 1 })
+            .checked_mul(sample_bytes)
             .ok_or_else(|| PyValueError::new_err("Metal tensor offset overflow"))?;
         let storage = tensor.call_method0("untyped_storage")?;
         let bytes = storage.call_method0("nbytes")?.extract::<usize>()?;
@@ -227,7 +235,7 @@ mod native {
         // tensor's byte offset. The tensor retains its allocator ownership.
         let address = storage.call_method0("data_ptr")?.extract::<usize>()?;
         torch.getattr("mps")?.call_method0("synchronize")?;
-        Ok((descriptor, address, offset))
+        Ok((descriptor, half, address, offset))
     }
     struct SharedMetalPixels {
         owner: Py<MetalImage>,
@@ -248,18 +256,18 @@ mod native {
     impl MetalImage {
         #[staticmethod]
         fn from_torch(tensor: &Bound<'_, PyAny>) -> PyResult<Self> {
-            let (descriptor, address, offset) = torch_buffer(tensor)?;
+            let (descriptor, half, address, offset) = torch_buffer(tensor)?;
             tensor.py().detach(|| {
                 let context = context()?;
                 // SAFETY: torch_buffer validates MPS storage and drains its producers.
                 // The tensor owner remains alive until the GPU copy completes.
-                let image = unsafe { context.import_buffer(descriptor, address, offset) }.map_err(gpu_runtime_error)?;
+                let image = unsafe { context.import_typed_buffer(descriptor, half, address, offset) }.map_err(gpu_runtime_error)?;
                 Ok(Self { context, image })
             })
         }
         fn copy_to_torch(&self, tensor: &Bound<'_, PyAny>) -> PyResult<()> {
-            let (descriptor, address, offset) = torch_buffer(tensor)?;
-            if descriptor != self.image.descriptor() {
+            let (descriptor, half, address, offset) = torch_buffer(tensor)?;
+            if descriptor != self.image.descriptor() || half != self.image.is_half() {
                 return Err(PyValueError::new_err("Metal export tensor does not match image storage"));
             }
             tensor.py().detach(|| {
@@ -268,11 +276,17 @@ mod native {
                 unsafe { self.context.export_buffer(&self.image, address, offset) }.map_err(gpu_runtime_error)
             })
         }
+        fn cast_float(&self, py: Python<'_>, half: bool) -> PyResult<Self> {
+            py.detach(|| {
+                let image = self.context.cast_float(&self.image, half).map_err(gpu_runtime_error)?;
+                Ok(Self { context: self.context, image })
+            })
+        }
         fn shared_image(slf: Bound<'_, Self>, mode: &str) -> PyResult<blanket_core::Image> {
             let mode = blanket_core::PixelMode::parse(mode)?;
             let image = slf.borrow();
             let d = image.image.descriptor();
-            if mode.channels() != d.channels as usize || mode.is_float() != d.float {
+            if image.image.is_half() || mode.channels() != d.channels as usize || mode.is_float() != d.float {
                 return Err(PyValueError::new_err("GPU image mode does not match storage"));
             }
             let native: &MetalImage = &image;
@@ -342,7 +356,7 @@ mod native {
         fn download_image(&self, py: Python<'_>, mode: &str) -> PyResult<blanket_core::Image> {
             let mode = blanket_core::PixelMode::parse(mode)?;
             let descriptor = self.image.descriptor();
-            if mode.channels() != descriptor.channels as usize || mode.is_float() != descriptor.float {
+            if self.image.is_half() || mode.channels() != descriptor.channels as usize || mode.is_float() != descriptor.float {
                 return Err(PyValueError::new_err("GPU image mode does not match storage"));
             }
             let pixels = py.detach(|| self.wait_download()).map_err(gpu_runtime_error)?;
@@ -359,6 +373,7 @@ mod native {
                 || !matches!(depth, 10 | 12 | 16)
                 || mode.channels() != d.channels as usize
                 || !d.float
+                || self.image.is_half()
             {
                 return Err(PyValueError::new_err("unsigned GPU image mode or depth does not match storage"));
             }

@@ -202,6 +202,18 @@ class CudaImage:
         """Return packed CPU bytes."""
         return self.download_buffer().tobytes()
 
+    def cast_float(self, dtype: str) -> CudaImage:
+        """Convert floating-point storage in the current stream."""
+        cp = cupy()
+        with cp.cuda.Device(self.device):
+            stream = cp.cuda.get_current_stream()
+            stream.wait_event(self.event)
+            try:
+                return CudaImage(self.array.astype(dtype, copy=False), owners=(self,))
+            except Exception as error:
+                stream.synchronize()
+                raise RuntimeError(f"CUDA sample conversion failed on device {self.device}: {error}") from error
+
     def to_torch(self) -> Tensor:
         """Export the CUDA array as a shared PyTorch tensor through DLPack.
 

@@ -47,6 +47,30 @@ class Array:
         self.nbytes = nbytes
 
 
+def test_cuda_float_cast_orders_stream_and_retains_input(cuda_events):
+    events, stream = cuda_events
+    waited = []
+    stream.wait_event = waited.append
+
+    class FloatArray(Array):
+        def astype(self, dtype, *, copy):
+            assert waited == events
+            assert dtype == "float16" and not copy
+            return Array(self.nbytes // 2)
+
+    source = _gpu_cuda.CudaImage(FloatArray())
+    pixels = weakref.ref(source.array)
+    stream.ptr = 2
+    result = source.cast_float("float16")
+    del source
+    events[0].complete = True
+    _gpu_cuda._collect_pending(0)
+    assert pixels() is not None
+    assert result.array.nbytes == 8
+    result.synchronize()
+    assert pixels() is None
+
+
 @pytest.mark.parametrize("floating", [False, True])
 @pytest.mark.parametrize("channels", [1, 3, 4])
 def test_cuda_upload_ignores_pinned_allocation_padding(cuda_events, monkeypatch, floating, channels):

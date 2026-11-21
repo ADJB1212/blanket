@@ -146,19 +146,22 @@ def test_precompiled_module_loads_without_source_compilation(monkeypatch):
         cuda_runtime.library.cache_clear()
 
 
-def test_dlpack_views_ownership_and_streams(cuda, monkeypatch):
+@pytest.mark.parametrize("dtype", ["float16", "float32"])
+def test_dlpack_views_ownership_and_streams(cuda, monkeypatch, dtype):
     import torch
 
+    dtype = getattr(torch, dtype)
     producer = torch.cuda.Stream()
     consumer = torch.cuda.Stream()
     processing = cuda.cuda.Stream(non_blocking=True)
     with torch.cuda.stream(producer):
-        tensor = torch.arange(4 * 19 * 23, dtype=torch.float32, device="cuda").reshape(4, 19, 23) / 2048
+        tensor = (torch.arange(4 * 19 * 23, dtype=torch.float32, device="cuda").reshape(4, 19, 23) / 2048).to(dtype)
         view = tensor[:, 1:18, 2:21]
         original = tensor.clone()
         with processing:
             image = ImageGpu.from_torch(view, layout="CHW")
     assert image.to_torch(layout="CHW").data_ptr() == view.data_ptr()
+    assert image.to_torch().dtype == dtype
 
     def no_staging(*args, **kwargs):
         raise AssertionError("unexpected CPU pixel staging")
@@ -180,9 +183,10 @@ def test_dlpack_views_ownership_and_streams(cuda, monkeypatch):
         reduction.synchronize()
     consumer.synchronize()
     assert output.device.type == "cuda"
+    assert output.dtype == torch.float32
     assert tuple(output.shape) == (4, 13, 11)
     assert torch.isfinite(output).all()
-    assert torch.equal(original, torch.arange(4 * 19 * 23, dtype=torch.float32, device="cuda").reshape(4, 19, 23) / 2048)
+    assert torch.equal(original, (torch.arange(4 * 19 * 23, dtype=torch.float32, device="cuda").reshape(4, 19, 23) / 2048).to(dtype))
 
 
 def test_dlpack_copy_and_export_lifetime(cuda):

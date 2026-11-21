@@ -145,8 +145,8 @@ class ProcessingPlan:
                 mode, depth, runtime, and device.
 
         Returns:
-            An independent resident image of the same type and descriptor.
-            The input remains unchanged; synchronize or export to wait.
+            An independent resident image in the plan's sample precision.
+            Float32 plans promote float16 storage on the GPU.
         """
         return self.run_batch([image])[0]
 
@@ -155,7 +155,8 @@ class ProcessingPlan:
 
         Args:
             images: Up to 1024 open GPU images, each matching the prepared size,
-                mode, depth, runtime, and device. Empty batches are allowed.
+                mode, depth, runtime, and device. Float32 plans also accept
+                float16 input. Empty batches are allowed.
 
         Returns:
             Independent resident images in input order, with copied metadata.
@@ -178,12 +179,13 @@ class ProcessingPlan:
             if not isinstance(image, (GpuImage, GpuUnsignedImage)):
                 raise TypeError("GPU plans require GpuImage inputs")
             raster = image._image if isinstance(image, GpuUnsignedImage) else image
-            depth = image.bit_depth if isinstance(image, GpuUnsignedImage) else (32 if raster.dtype == "float32" else 8)
+            depth = image.bit_depth if isinstance(image, GpuUnsignedImage) else (8 if raster.dtype == "uint8" else 32)
             raster._check()
             if image.runtime != self.runtime or image.device != self.device or image.size != self.size or image.mode != self.mode or depth != self.bit_depth:
                 raise ValueError("GPU plan input must match size, mode, sample depth, runtime, and device")
             working.append(raster)
-        inputs = [image._resource for image in working]
+        promoted = [image._float32() for image in working]
+        inputs = [image._resource for image in promoted]
         resources = cast("CudaPlan", plan).run_batch(cast("list[CudaImage]", inputs)) if self.runtime == "cuda" else cast("MetalPlan", plan).run_batch(inputs)
         results: list[GpuImage | GpuUnsignedImage] = []
         for resource, image in zip(resources, working, strict=True):

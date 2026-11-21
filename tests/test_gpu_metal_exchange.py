@@ -95,6 +95,26 @@ def test_native_exchange_preserves_nonfinite_sample_bits() -> None:
     assert restored.to_image().tobytes() == data
 
 
+@pytest.mark.parametrize("runtime", ["native", "torch"])
+def test_half_tensor_exchange_keeps_dtype_and_storage_offset(runtime: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    source = torch.arange(32, dtype=torch.float16, device="mps")[1:22].reshape(1, 7, 3) / 3
+    expected = source.cpu()
+    offset = torch.cat((torch.zeros(1, dtype=torch.float16, device="mps"), source.flatten()))[1:].reshape(1, 7, 3)
+    assert offset.storage_offset() == 1
+    with monkeypatch.context() as patch:
+        patch.setattr(torch.Tensor, "cpu", unexpected_transfer)
+        patch.setattr(ImageGpu.GpuImage, "to_image", unexpected_transfer)
+        resident = ImageGpu.from_torch(offset, layout="HWC", runtime=runtime, copy=True)
+        compact = resident.to_torch(layout="CHW")
+        promoted = resident.invert().to_torch()
+    offset.zero_()
+    resident.close()
+    assert resident.dtype == "float16" and compact.dtype == torch.float16
+    assert torch.equal(compact.cpu(), expected.permute(2, 0, 1))
+    assert promoted.dtype == torch.float32
+    assert torch.equal(promoted.cpu(), 1 - expected.float())
+
+
 @pytest.mark.parametrize("mode", ["F", "RGB;F", "RGBA;F"])
 @pytest.mark.parametrize("copy", [False, True])
 @pytest.mark.parametrize("strided", [False, True])

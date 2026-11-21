@@ -731,8 +731,8 @@ for cache limits, ownership, completion, and error contracts.
 Same status as the CPU future ideas: exploratory, explicit opt-in, and no
 silent CPU fallback when a kernel is missing.
 
-- [ ] **Half-precision residency** — `float16` storage for HDR and tensor
-      pipelines, converting to float32 for operations that have no half kernel
+- [x] **Half-precision residency** — opt-in `float16` storage for HDR and tensor
+      pipelines, with on-device float32 promotion for existing image kernels
 - [ ] **Resident tone mapping and gain maps** — run the CPU HDR operators and
       ISO 21496-1 gain-map application on an already-resident image
 - [ ] **Resident perceptual color** — OKLab conversions, white balance, and

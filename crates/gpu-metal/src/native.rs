@@ -163,6 +163,7 @@ pub struct Context {
     queue: Queue,
     library: Retained<ProtocolObject<dyn MTLLibrary>>,
     precise_library: OnceLock<Result<Retained<ProtocolObject<dyn MTLLibrary>>, GpuError>>,
+    float_casts: [OnceLock<Result<Pipeline, GpuError>>; 2],
     pipelines: [[OnceLock<Result<Pipeline, GpuError>>; PIPELINE_VARIANTS]; OPERATION_COUNT],
     pool: Arc<Mutex<BufferPool>>,
     controls: Mutex<ControlCache>,
@@ -177,6 +178,8 @@ pub struct Context {
 }
 pub struct Image {
     descriptor: Descriptor,
+    // The descriptor describes the float32 layout used by image kernels.
+    half: bool,
     buffer: Retained<ProtocolObject<dyn MTLBuffer>>,
     completion: Option<Command>,
     pool: Arc<Mutex<BufferPool>>,
@@ -219,6 +222,11 @@ impl Image {
     #[must_use]
     pub fn descriptor(&self) -> Descriptor {
         self.descriptor
+    }
+
+    #[must_use]
+    pub fn is_half(&self) -> bool {
+        self.half
     }
 
     fn track_read(&self, command: &Command) {
@@ -273,13 +281,26 @@ impl Context {
     /// `address` must point to a live MTLBuffer with no concurrent writers.
     /// The owner must remain alive until this call returns.
     pub unsafe fn import_buffer(&self, descriptor: Descriptor, address: usize, offset: usize) -> Result<Image, GpuError> {
-        let len = descriptor.byte_len()?;
+        // SAFETY: The caller guarantees the source buffer is live and synchronized.
+        unsafe { self.import_typed_buffer(descriptor, false, address, offset) }
+    }
+
+    /// Copy a synchronized external Metal buffer with the selected sample width.
+    ///
+    /// # Safety
+    /// `address` must point to a live MTLBuffer with no concurrent writers.
+    /// The owner must remain alive until this call returns.
+    pub unsafe fn import_typed_buffer(&self, descriptor: Descriptor, half: bool, address: usize, offset: usize) -> Result<Image, GpuError> {
+        if half && !descriptor.float {
+            return Err(GpuError::invalid("float16 storage requires a float image"));
+        }
+        let len = descriptor.byte_len()? >> usize::from(half);
         // SAFETY: The caller supplies a live MTLBuffer; retain it through GPU completion.
         let source =
             unsafe { Retained::retain(address as *mut ProtocolObject<dyn MTLBuffer>) }.ok_or_else(|| GpuError::invalid("null Metal buffer"))?;
         let buffer = self.allocate_image(len)?;
         self.copy_buffer(&source, offset, &buffer, 0, len)?;
-        Ok(Image { descriptor, buffer, completion: None, pool: Arc::clone(&self.pool), uses: Mutex::default() })
+        Ok(Image { descriptor, half, buffer, completion: None, pool: Arc::clone(&self.pool), uses: Mutex::default() })
     }
 
     /// Copy image samples into a synchronized external Metal buffer.
@@ -292,7 +313,7 @@ impl Context {
         // SAFETY: The caller supplies a live MTLBuffer; retain it through GPU completion.
         let destination =
             unsafe { Retained::retain(address as *mut ProtocolObject<dyn MTLBuffer>) }.ok_or_else(|| GpuError::invalid("null Metal buffer"))?;
-        self.copy_buffer(&image.buffer, 0, &destination, offset, image.descriptor.byte_len()?)
+        self.copy_buffer(&image.buffer, 0, &destination, offset, image.buffer.length())
     }
 
     pub fn upload_with(&self, descriptor: Descriptor, initialize: impl FnOnce(&mut [u8])) -> Result<Image, GpuError> {
@@ -303,7 +324,46 @@ impl Context {
         // complete, and this call exclusively owns the buffer of validated length.
         let bytes = unsafe { std::slice::from_raw_parts_mut(buffer.contents().cast().as_ptr(), len) };
         initialize(bytes);
-        Ok(Image { descriptor, buffer, completion: None, pool: Arc::clone(&self.pool), uses: Mutex::default() })
+        Ok(Image { descriptor, half: false, buffer, completion: None, pool: Arc::clone(&self.pool), uses: Mutex::default() })
+    }
+
+    /// Convert floating-point sample storage on the GPU.
+    pub fn cast_float(&self, source: &Image, half: bool) -> Result<Image, GpuError> {
+        let descriptor = source.descriptor;
+        if !descriptor.float || source.half == half || !Arc::ptr_eq(&source.pool, &self.pool) {
+            return Err(GpuError::invalid("GPU float cast requires a float image of the other precision on this device"));
+        }
+        autoreleasepool(|_| {
+            let bytes = descriptor.byte_len()?;
+            let buffer = self.allocate_image(bytes >> usize::from(half))?;
+            let pipeline = self.float_casts[usize::from(half)]
+                .get_or_init(|| {
+                    let library = self.precise_library()?;
+                    let name = if half { "cast_f32_f16" } else { "cast_f16_f32" };
+                    let function = library
+                        .newFunctionWithName(&NSString::from_str(name))
+                        .ok_or_else(|| GpuError::unavailable(format!("Metal kernel unavailable: {name}")))?;
+                    self.device.newComputePipelineStateWithFunction_error(&function).map_err(metal_error)
+                })
+                .as_ref()
+                .map_err(Clone::clone)?;
+            let command = self.queue.command_buffer().ok_or_else(|| GpuError::allocation("cannot allocate Metal cast command buffer"))?;
+            let encoder = command.compute_encoder().ok_or_else(|| GpuError::allocation("cannot allocate Metal cast encoder"))?;
+            encoder.set_pipeline(pipeline);
+            // SAFETY: The exact sample count fits both buffers, which the command retains.
+            unsafe {
+                encoder.set_buffer(Some(&source.buffer), 0, SOURCE_SLOT);
+                encoder.set_buffer(Some(&buffer), 0, OUTPUT_SLOT);
+            }
+            encoder.dispatch_threads(
+                MTLSize { width: bytes / size_of::<f32>(), height: 1, depth: 1 },
+                MTLSize { width: THREADGROUP_THREADS.min(pipeline.maxTotalThreadsPerThreadgroup()), height: 1, depth: 1 },
+            );
+            encoder.end_encoding();
+            source.track_read(&command);
+            command.commit();
+            Ok(Image { descriptor, half, buffer, completion: Some(command), pool: Arc::clone(&self.pool), uses: Mutex::default() })
+        })
     }
 
     pub fn prepare_plan(&self, geometry: blanket_gpu::plan::Plan) -> Result<Plan, GpuError> {
@@ -346,7 +406,7 @@ impl Context {
             let d = geometry.descriptor();
             let tile = geometry.tile();
             let halo = geometry.halo();
-            if sources.len() > 1024 || sources.iter().any(|source| source.descriptor != d || !Arc::ptr_eq(&source.pool, &self.pool)) {
+            if sources.len() > 1024 || sources.iter().any(|source| source.half || source.descriptor != d || !Arc::ptr_eq(&source.pool, &self.pool)) {
                 return Err(GpuError::invalid("GPU plan inputs must match its descriptor and execution context (at most 1024 images)"));
             }
             if sources.is_empty() {
@@ -436,6 +496,7 @@ impl Context {
                 }
                 outputs.push(Image {
                     descriptor: d,
+                    half: false,
                     buffer: output,
                     completion: Some(Arc::clone(&command)),
                     pool: Arc::clone(&self.pool),
@@ -460,12 +521,15 @@ impl Context {
     pub fn paste(&self, background: &Image, source: &Image, mask: Option<&Image>, position: [i32; 2]) -> Result<Image, GpuError> {
         let d = background.descriptor;
         let s = source.descriptor;
-        if d.channels != s.channels
+        if background.half
+            || source.half
+            || d.channels != s.channels
             || d.float != s.float
             || !Arc::ptr_eq(&background.pool, &self.pool)
             || !Arc::ptr_eq(&source.pool, &self.pool)
             || mask.is_some_and(|mask| {
-                mask.descriptor.width != s.width
+                mask.half
+                    || mask.descriptor.width != s.width
                     || mask.descriptor.height != s.height
                     || mask.descriptor.channels != 1
                     || !Arc::ptr_eq(&mask.pool, &self.pool)
@@ -508,7 +572,7 @@ impl Context {
                 mask.track_read(&command);
             }
             command.commit();
-            Ok(Image { descriptor: d, buffer, completion: Some(command), pool: Arc::clone(&self.pool), uses: Mutex::default() })
+            Ok(Image { descriptor: d, half: false, buffer, completion: Some(command), pool: Arc::clone(&self.pool), uses: Mutex::default() })
         })
     }
 
@@ -567,6 +631,7 @@ impl Context {
                 queue,
                 library,
                 precise_library: OnceLock::new(),
+                float_casts: std::array::from_fn(|_| OnceLock::new()),
                 pipelines,
                 conversions,
                 reductions,
@@ -580,6 +645,19 @@ impl Context {
                 blur_pipelines,
             })
         })
+    }
+    fn precise_library(&self) -> Result<&ProtocolObject<dyn MTLLibrary>, GpuError> {
+        self.precise_library
+            .get_or_init(|| {
+                let options = objc2_metal::MTLCompileOptions::new();
+                options.setLanguageVersion(MTLLanguageVersion::Version4_0);
+                options.setMathMode(MTLMathMode::Safe);
+                options.setOptimizationLevel(MTLLibraryOptimizationLevel::Default);
+                let source = NSString::from_str(&format!("#define BLANKET_METAL_SPECIALIZE\n{}\n{}", super::SHADERS, super::NATIVE_SHADERS));
+                self.device.newLibraryWithSource_options_error(&source, Some(&options)).map_err(metal_error)
+            })
+            .as_deref()
+            .map_err(Clone::clone)
     }
     fn operation_pipeline(&self, operation: u32, floating: bool, channels: u32) -> Result<&ProtocolObject<dyn MTLComputePipelineState>, GpuError> {
         let slots = self.pipelines.get(operation as usize).ok_or_else(|| GpuError::invalid("invalid GPU operation"))?;
@@ -613,22 +691,8 @@ impl Context {
                 } else {
                     "image_u8"
                 };
-                let library = if floating && matches!(operation, operation::RESIZE | operation::TRANSFER) {
-                    self.precise_library
-                        .get_or_init(|| {
-                            let options = objc2_metal::MTLCompileOptions::new();
-                            options.setLanguageVersion(MTLLanguageVersion::Version4_0);
-                            options.setMathMode(MTLMathMode::Safe);
-                            options.setOptimizationLevel(MTLLibraryOptimizationLevel::Default);
-                            let source =
-                                NSString::from_str(&format!("#define BLANKET_METAL_SPECIALIZE\n{}\n{}", super::SHADERS, super::NATIVE_SHADERS));
-                            self.device.newLibraryWithSource_options_error(&source, Some(&options)).map_err(metal_error)
-                        })
-                        .as_ref()
-                        .map_err(Clone::clone)?
-                } else {
-                    &self.library
-                };
+                let library =
+                    if floating && matches!(operation, operation::RESIZE | operation::TRANSFER) { self.precise_library()? } else { &self.library };
                 let function = library.newFunctionWithName_constantValues_error(&NSString::from_str(name), &constants).map_err(metal_error)?;
                 self.device.newComputePipelineStateWithFunction_error(&function).map_err(metal_error)
             })
@@ -701,6 +765,9 @@ impl Backend for Context {
         self.upload_with(descriptor, |output| output.copy_from_slice(bytes))
     }
     unsafe fn dispatch(&self, source: &Image, other: &Image, request: &Dispatch) -> Result<Image, GpuError> {
+        if source.half || other.half {
+            return Err(GpuError::invalid("GPU dispatch requires float16 inputs to be promoted first"));
+        }
         autoreleasepool(|_| {
             let output_bytes = request.output.byte_len()?;
             let buffer = self.allocate_image(output_bytes)?;
@@ -784,7 +851,14 @@ impl Backend for Context {
             if let Some(buffer) = partials {
                 self.pool.lock().unwrap_or_else(|error| error.into_inner()).put(PoolEntry { buffer, uses: vec![Arc::clone(&command)] });
             }
-            Ok(Image { descriptor: request.output, buffer, completion: Some(command), pool: Arc::clone(&self.pool), uses: Mutex::default() })
+            Ok(Image {
+                descriptor: request.output,
+                half: false,
+                buffer,
+                completion: Some(command),
+                pool: Arc::clone(&self.pool),
+                uses: Mutex::default(),
+            })
         })
     }
     fn synchronize(&self, image: &Image) -> Result<(), GpuError> {

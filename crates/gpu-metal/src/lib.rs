@@ -34,6 +34,8 @@ const NATIVE_SHADERS: &str = concat!(
     include_str!("shaders/statistics.metal"),
     "\n",
     include_str!("shaders/paste.metal"),
+    "\n",
+    include_str!("shaders/float_cast.metal"),
 );
 
 #[cfg(target_os = "macos")]
