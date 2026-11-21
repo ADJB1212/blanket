@@ -76,12 +76,17 @@ fn placement(pixels: &[u8], width: usize, height: usize, fractions: (f64, f64)) 
         *value /= alpha_sum;
     }
     let mean_alpha = alpha_sum / (width * height) as f64;
-    let mut columns = vec![0.0; width];
-    let mut rows = vec![0.0; height];
+    let mut columns = [0.0; 128];
+    let mut rows = [0.0; 128];
+    let columns = &mut columns[..width];
+    let rows = &mut rows[..height];
     for (y, row) in rows.iter_mut().enumerate() {
         for (x, column) in columns.iter_mut().enumerate() {
             let offset = (y * width + x) * 4;
             let pixel = &pixels[offset..offset + 4];
+            if pixel[3] == 0 {
+                continue;
+            }
             let alpha = f64::from(pixel[3]) / 255.0;
             let contrast: f64 = (0..3).map(|c| (f64::from(pixel[c]) - mean[c]).abs()).sum();
             let mut edge = 0.0;
@@ -95,7 +100,7 @@ fn placement(pixels: &[u8], width: usize, height: usize, fractions: (f64, f64)) 
             *row += score;
         }
     }
-    (axis_position(&columns, fractions.0), axis_position(&rows, fractions.1))
+    (axis_position(columns, fractions.0), axis_position(rows, fractions.1))
 }
 
 fn axis_position(scores: &[f64], fraction: f64) -> f64 {
@@ -105,13 +110,17 @@ fn axis_position(scores: &[f64], fraction: f64) -> f64 {
     let extent = scores.len() as f64;
     let window = extent * fraction;
     let travel = extent - window;
+    let radius = window.max(1.0) * 0.5;
     let score = |position: f64| {
         let center = position * travel + window * 0.5;
-        scores
+        // Include the boundary bins and preserve summation order inside the window.
+        let first = (center - radius - 0.5).floor() as usize;
+        let end = ((center + radius + 0.5).ceil() as usize).min(scores.len());
+        scores[first..end]
             .iter()
             .enumerate()
             .map(|(i, value)| {
-                let distance = ((i as f64 + 0.5 - center) / (window.max(1.0) * 0.5)).abs();
+                let distance = (((first + i) as f64 + 0.5 - center) / radius).abs();
                 value * (1.0 - distance * distance).max(0.0)
             })
             .sum::<f64>()
