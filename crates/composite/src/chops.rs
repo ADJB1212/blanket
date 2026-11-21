@@ -83,14 +83,45 @@ fn difference_bbox(
         }
         top = top.min(y);
         bottom = y + 1;
-        if let Some(x) = a[..left * channels].iter().zip(b).position(|(a, b)| a != b) {
+        let prefix = left * channels;
+        if let Some(x) = difference_position::<false>(&a[..prefix], &b[..prefix]) {
             left = x / channels;
         }
-        if let Some(x) = a[right * channels..].iter().zip(&b[right * channels..]).rposition(|(a, b)| a != b) {
+        let suffix = right * channels;
+        if let Some(x) = difference_position::<true>(&a[suffix..], &b[suffix..]) {
             right += x / channels + 1;
         }
     }
     (bottom != 0).then_some((left, top, right, bottom))
+}
+
+fn difference_position<const REVERSE: bool>(a: &[u8], b: &[u8]) -> Option<usize> {
+    const BLOCK: usize = 64;
+    type Vector = Simd<u8, BLOCK>;
+    let (a_blocks, a_tail) = a.as_chunks::<BLOCK>();
+    let (b_blocks, b_tail) = b.as_chunks::<BLOCK>();
+    let tail = a_blocks.len() * BLOCK;
+    let blocks = a_blocks.iter().zip(b_blocks).enumerate();
+    if REVERSE {
+        if let Some(index) = a_tail.iter().zip(b_tail).rposition(|(a, b)| a != b) {
+            return Some(tail + index);
+        }
+        for (i, (&a, &b)) in blocks.rev() {
+            let changed = Vector::from_array(a).simd_ne(Vector::from_array(b));
+            if changed.any() {
+                return Some(i * BLOCK + (u64::BITS - 1 - changed.to_bitmask().leading_zeros()) as usize);
+            }
+        }
+        None
+    } else {
+        for (i, (&a, &b)) in blocks {
+            let changed = Vector::from_array(a).simd_ne(Vector::from_array(b));
+            if changed.any() {
+                return Some(i * BLOCK + changed.first_set().unwrap());
+            }
+        }
+        a_tail.iter().zip(b_tail).position(|(a, b)| a != b).map(|index| tail + index)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -521,6 +552,22 @@ fn chops_offset(py: Python<'_>, image: &Image, xoffset: i64, yoffset: i64) -> Py
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn difference_scans_match_scalar_on_unaligned_blocks_and_tails() {
+        for len in [0, 1, 63, 64, 65, 127, 128, 129, 193] {
+            let source = vec![17; len + 1];
+            let mut other = source.clone();
+            assert_eq!(difference_position::<false>(&source[1..], &other[1..]), None);
+            assert_eq!(difference_position::<true>(&source[1..], &other[1..]), None);
+            for i in 0..len {
+                other[i + 1] = 21;
+                assert_eq!(difference_position::<false>(&source[1..], &other[1..]), Some(i));
+                assert_eq!(difference_position::<true>(&source[1..], &other[1..]), Some(i));
+                other[i + 1] = 17;
+            }
+        }
+    }
 
     #[test]
     fn sample_vectors_match_scalar_with_tails_and_guards() {
