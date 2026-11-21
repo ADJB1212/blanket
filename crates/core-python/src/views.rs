@@ -3,7 +3,10 @@
 use blanket_core::{Image, PixelMode};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyCapsule, PyMemoryView};
+use pyo3::sync::PyOnceLock;
+use pyo3::types::{PyCapsule, PyMemoryView, PyType};
+
+static PILLOW_CORE_TYPE: PyOnceLock<Py<PyType>> = PyOnceLock::new();
 
 #[pyclass(frozen, module = "blanket._blanket")]
 #[derive(Debug)]
@@ -80,6 +83,13 @@ impl PillowBuffer {
 #[pyfunction]
 pub(crate) fn pillow_buffer_view(py: Python<'_>, source: &Bound<'_, PyAny>, mode: &str, size: (u32, u32)) -> PyResult<Py<PyMemoryView>> {
     let core = source.getattr("im")?;
+    let core_type = PILLOW_CORE_TYPE.get_or_try_init(py, || {
+        let probe = py.import("PIL._imaging")?.call_method1("new", ("L", (1, 1)))?;
+        Ok::<_, PyErr>(probe.get_type().unbind())
+    })?;
+    if !core.get_type().is(core_type.bind(py)) {
+        return Err(PyValueError::new_err("buffer sharing requires a native Pillow core"));
+    }
     if core.getattr("mode")?.extract::<String>()? != mode || core.getattr("size")?.extract::<(u32, u32)>()? != size {
         return Err(PyValueError::new_err("Pillow core layout does not match the requested image"));
     }
@@ -96,7 +106,7 @@ pub(crate) fn pillow_buffer_view(py: Python<'_>, source: &Bound<'_, PyAny>, mode
         .ok_or_else(|| PyValueError::new_err("image dimensions are too large"))?;
     let capsule = core.call_method0("__arrow_c_array__")?;
     let pointer = capsule.cast::<PyCapsule>()?.pointer_checked(Some(c"arrow_array"))?;
-    // SAFETY: Pillow's Arrow exporter supplies an ArrowArray under this name.
+    // SAFETY: The exact native Pillow core type supplies an ArrowArray under this name.
     // The capsule remains owned by PillowBuffer and is never consumed or renamed.
     let array = unsafe { &*pointer.cast::<ArrowArray>().as_ptr() };
     if array.release.is_none() || array.offset != 0 || array.null_count != 0 || array.length != i64::from(size.0) * i64::from(size.1) {
