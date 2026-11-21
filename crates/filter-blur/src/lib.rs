@@ -214,8 +214,22 @@ pub fn filter_blur(py: Python<'_>, image: &Image, radii: (f32, f32), kind: BlurK
     if radii == (0.0, 0.0) {
         return image.copy(py);
     }
-    let pixels = py.detach(|| blur(image, source, radii, kind))?;
-    output(image, pixels)
+    let pixels = py.detach(|| {
+        let channels = image.pixel_mode().channels();
+        let constant = source.len() >= channels
+            && source[..channels] == source[source.len() - channels..]
+            && source[..source.len() - channels] == source[channels..];
+        if constant {
+            blur_radii(radii, kind)?;
+            Ok(None)
+        } else {
+            blur(image, source, radii, kind).map(Some)
+        }
+    })?;
+    match pixels {
+        Some(pixels) => output(image, pixels),
+        None => image.copy(py),
+    }
 }
 
 #[pyfunction]

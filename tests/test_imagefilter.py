@@ -158,6 +158,20 @@ def test_blurs(name: str, mode: str, subtests: pytest.Subtests) -> None:
                 compare(mode, size, getattr(ImageFilter, name)(radius), getattr(PillowFilter, name)(radius))
 
 
+@pytest.mark.parametrize("name", ["BoxBlur", "GaussianBlur"])
+def test_uniform_blur_copies_independently_and_detects_a_different_tail(name: str) -> None:
+    color = (19, 45, 81, 217)
+    image, reference = image_pair("RGBA", (35, 17), bytes(color) * (35 * 17))
+    blur = getattr(ImageFilter, name)((0.5, 7.25))
+    result = image.filter(blur)
+    assert result.tobytes() == reference.filter(getattr(PillowFilter, name)((0.5, 7.25))).tobytes()
+    result.putpixel((0, 0), (0, 0, 0, 0))
+    assert image.getpixel((0, 0)) == color
+    image.putpixel((34, 16), (255, 255, 255, 255))
+    reference.putpixel((34, 16), (255, 255, 255, 255))
+    assert image.filter(blur).tobytes() == reference.filter(getattr(PillowFilter, name)((0.5, 7.25))).tobytes()
+
+
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 def test_vertical_blur_band_boundaries(mode: str, subtests: pytest.Subtests) -> None:
     for name in ["BoxBlur", "GaussianBlur"]:
