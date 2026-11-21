@@ -170,6 +170,14 @@ def test_group_hashes_large_radius_one_search() -> None:
     assert ImageHash.group_hashes(hashes, 1) == [[i] for i in range(300)] + [[300, 301, 302, 303]]
 
 
+@pytest.mark.parametrize("size", [9, 64])
+def test_wide_hash_radius_scans_keep_word_and_tail_matches(size: int) -> None:
+    high_bit = 1 << (size**2 - 1)
+    hashes = [ImageHash.ImageHash(value, size) for value in (0, high_bit, high_bit | 3, 255, 0)]
+    assert ImageHash.nearest_neighbors(hashes[0], hashes, 2) == [(0, 0), (4, 0), (1, 1)]
+    assert ImageHash.group_hashes(hashes, 2) == [[0, 1, 2, 4], [3]]
+
+
 @pytest.mark.parametrize("max_distance,error", [(-1, ValueError), (True, TypeError), (1.0, TypeError)])
 def test_hash_search_rejects_invalid_radii(max_distance, error) -> None:
     with pytest.raises(error, match="max_distance"):
