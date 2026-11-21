@@ -176,6 +176,11 @@ class ImagePalette:
             return self.palette
         if isinstance(self.palette, bytearray):
             return bytes(self.palette)
+        if type(self.palette) in (list, tuple):
+            try:
+                return bytes(self.palette)
+            except ValueError as error:
+                raise OverflowError(str(error)) from error
         return array("B", self.palette).tobytes()
 
     tostring = tobytes
