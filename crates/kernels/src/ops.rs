@@ -1,6 +1,5 @@
 //! Shared lookup-table and pixel layout kernels.
 use std::simd::Simd;
-use std::simd::cmp::SimdPartialEq;
 use std::simd::num::SimdUint;
 
 use crate::pixels::{self, Bytes, load, store};
@@ -8,14 +7,9 @@ use crate::pixels::{self, Bytes, load, store};
 pub fn constant_pixel<const C: usize>(source: &[u8]) -> Option<[u8; C]> {
     let pixels = source.as_chunks::<C>().0;
     let first = *pixels.first()?;
-    let (blocks, tail) = pixels.as_chunks::<16>();
-    for block in blocks {
-        let values = load::<C>(block.as_flattened());
-        if (0..C).any(|c| values[c].simd_ne(Bytes::splat(first[c])).any()) {
-            return None;
-        }
-    }
-    tail.iter().all(|pixel| *pixel == first).then_some(first)
+    // Equal adjacent pixels imply the entire run is constant.
+    let bytes = pixels.as_flattened();
+    (bytes[C..] == bytes[..bytes.len() - C]).then_some(first)
 }
 
 pub fn reverse_gray(source: &[u8], output: &mut [std::mem::MaybeUninit<u8>]) {
