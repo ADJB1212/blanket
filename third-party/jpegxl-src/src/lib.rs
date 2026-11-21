@@ -41,7 +41,7 @@ fn source_dir() -> PathBuf {
     let status = Command::new("git")
         .arg("-C")
         .arg(&source)
-        .args(["submodule", "update", "--init", "--force", "--depth", "1", "--", "third_party/brotli", "third_party/highway", "third_party/skcms"])
+        .args(["submodule", "update", "--init", "--force", "--depth", "1", "--", "third_party/brotli", "third_party/highway", "third_party/lcms"])
         .status()
         .expect("failed to run git to initialize libjxl dependencies");
     assert!(status.success(), "failed to initialize libjxl dependencies");
@@ -77,6 +77,7 @@ pub fn build() {
         .define("DJPEGXL_TEST_TOOLS", "OFF")
         .define("DJPEGXL_ENABLE_DEVTOOLS", "OFF")
         .define("DJPEGXL_ENABLE_WASM_THREADS", "OFF")
+        .define("DJPEGXL_ENABLE_SKCMS", "OFF")
         .define("JPEGXL_BUNDLE_LIBPNG", "OFF");
 
     if let Ok(p) = std::thread::available_parallelism() {

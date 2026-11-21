@@ -53,7 +53,7 @@ libwebp)
 	;;
 libjxl)
 	repository=https://github.com/libjxl/libjxl.git
-	clone_flags=(--recursive --shallow-submodules)
+	clone_flags=(--depth 1)
 	;;
 *)
 	echo "Unknown dependency: $name" >&2
@@ -65,6 +65,10 @@ if [[ -n ${BLANKET_SOURCE_ROOT:-} ]]; then
 	cp -R "$BLANKET_SOURCE_ROOT/$name" "$source_dir"
 else
 	git clone --branch "$version" "${clone_flags[@]}" "$repository" "$source_dir"
+	if [[ $name == libjxl ]]; then
+		git -C "$source_dir" submodule update --init --force --depth 1 -- \
+			third_party/brotli third_party/highway third_party/lcms
+	fi
 fi
 bash scripts/collect_release_licenses.sh "$source_dir" "$prefix/share/blanket-licenses/$name"
 
