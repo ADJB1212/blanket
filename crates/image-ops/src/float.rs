@@ -21,16 +21,24 @@ pub fn convert(image: &Image, mode: PixelMode, depth: Option<u8>) -> PyResult<Im
         let pixels = if source_channels == channels {
             source.to_vec()
         } else {
-            let mut pixels = blanket_core::buffers::buffer(image.size(), channels * 4)?;
-            blanket_kernels::parallel::chunks_mut(&mut pixels, blanket_kernels::parallel::CHUNK_PIXELS * channels * 4, |chunk, dst| {
-                let start = chunk * blanket_kernels::parallel::CHUNK_PIXELS * source_channels * 4;
-                for (src, dst) in source[start..].chunks_exact(source_channels * 4).zip(dst.chunks_exact_mut(channels * 4)) {
-                    dst[..12].copy_from_slice(&src[..12]);
-                    if channels == 4 {
-                        dst[12..16].copy_from_slice(&1.0_f32.to_le_bytes());
+            use blanket_kernels::parallel::{CHUNK_PIXELS, MIN_PARALLEL_BYTES, chunks_mut_above};
+            let mut pixels = blanket_core::buffers::reserved_buffer(image.size(), channels * 4)?;
+            let len = source.len() / source_channels * channels;
+            chunks_mut_above(&mut pixels.spare_capacity_mut()[..len], CHUNK_PIXELS * channels * 4, MIN_PARALLEL_BYTES, |chunk, dst| {
+                let source = &source[chunk * CHUNK_PIXELS * source_channels * 4..];
+                if channels == 4 {
+                    for (src, dst) in source.as_chunks::<12>().0.iter().zip(dst.as_chunks_mut::<16>().0) {
+                        dst[..12].write_copy_of_slice(src);
+                        dst[12..].write_copy_of_slice(&1.0_f32.to_le_bytes());
+                    }
+                } else {
+                    for (src, dst) in source.as_chunks::<16>().0.iter().zip(dst.as_chunks_mut::<12>().0) {
+                        dst.write_copy_of_slice(&src[..12]);
                     }
                 }
             });
+            // SAFETY: Each partition initialized all its output color and alpha bytes.
+            unsafe { pixels.set_len(len) };
             pixels
         };
         return Image::from_color_float_bytes(image.width(), image.height(), mode, pixels);
