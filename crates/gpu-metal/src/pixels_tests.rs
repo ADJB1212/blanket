@@ -42,7 +42,7 @@ fn guarded_dispatch(
         MTLSize { width: group_threads.min(pipeline.maxTotalThreadsPerThreadgroup()), height: 1, depth: 1 },
     );
     encoder.end_encoding();
-    command.commit();
+    command.commit().unwrap();
     command.wait_until_completed();
     assert_eq!(command.status(), MTLCommandBufferStatus::Completed, "{:?}", command.error());
     let bytes = context.download(&output).unwrap();
@@ -266,7 +266,7 @@ fn packed_tile_copies_preserve_pixels_outside_odd_rectangles() {
                 let encoder = command.compute_encoder().unwrap();
                 context.encode_tile(&encoder, &source.buffer, &output.buffer, [37, 7, channels, 41, 9, 3, 2, 5, 4, width, 3], floating);
                 encoder.end_encoding();
-                command.commit();
+                command.commit().unwrap();
                 command.wait_until_completed();
                 assert_eq!(command.status(), MTLCommandBufferStatus::Completed);
                 for y in 0..3 {

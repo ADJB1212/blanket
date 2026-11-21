@@ -266,7 +266,7 @@ impl Context {
             // orders access from external queues before entering this method.
             unsafe { encoder.copy_buffer(source, source_offset, destination, destination_offset, len) };
             encoder.end_encoding();
-            command.commit();
+            command.commit()?;
             command.wait_until_completed();
             if command.status() == MTLCommandBufferStatus::Error {
                 return Err(command.error().unwrap_or_else(|| GpuError::execution("Metal exchange failed")));
@@ -361,7 +361,7 @@ impl Context {
             );
             encoder.end_encoding();
             source.track_read(&command);
-            command.commit();
+            command.commit()?;
             Ok(Image { descriptor, half, buffer, completion: Some(command), pool: Arc::clone(&self.pool), uses: Mutex::default() })
         })
     }
@@ -507,7 +507,7 @@ impl Context {
             for source in sources {
                 source.track_read(&command);
             }
-            command.commit();
+            command.commit()?;
             for buffer in scratch {
                 self.pool.lock().unwrap_or_else(|error| error.into_inner()).put(PoolEntry { buffer, uses: vec![Arc::clone(&command)] });
             }
@@ -571,7 +571,7 @@ impl Context {
             if let Some(mask) = mask {
                 mask.track_read(&command);
             }
-            command.commit();
+            command.commit()?;
             Ok(Image { descriptor: d, half: false, buffer, completion: Some(command), pool: Arc::clone(&self.pool), uses: Mutex::default() })
         })
     }
@@ -847,7 +847,7 @@ impl Backend for Context {
             if !std::ptr::eq(source, other) {
                 other.track_read(&command);
             }
-            command.commit();
+            command.commit()?;
             if let Some(buffer) = partials {
                 self.pool.lock().unwrap_or_else(|error| error.into_inner()).put(PoolEntry { buffer, uses: vec![Arc::clone(&command)] });
             }
@@ -967,7 +967,7 @@ mod tests {
             encoder.dispatch_threads(MTLSize { width: (33usize * 17).div_ceil(4), height: 1, depth: 1 }, MTLSize { width: 256, height: 1, depth: 1 });
         }
         encoder.end_encoding();
-        command.commit();
+        command.commit().unwrap();
         command.wait_until_completed();
         assert_eq!(command.status(), MTLCommandBufferStatus::Completed);
         for (index, output) in outputs.iter().enumerate() {
@@ -1029,13 +1029,13 @@ mod tests {
         }
         assert_eq!(image.uses.lock().unwrap().len(), commands.len());
         for command in &commands {
-            command.commit();
+            command.commit().unwrap();
         }
         commands.last().unwrap().wait_until_completed();
         let next = context.queue.command_buffer().unwrap();
         image.track_read(&next);
         assert_eq!(image.uses.lock().unwrap().len(), 1);
-        next.commit();
+        next.commit().unwrap();
         next.wait_until_completed();
     }
 
@@ -1071,7 +1071,7 @@ mod tests {
         assert!(pool.take(1024, true).is_none());
         assert_eq!(pool.take(1024, false).unwrap().contents(), address);
         assert_eq!(pool.bytes, 0);
-        command.commit();
+        command.commit().unwrap();
         command.wait_until_completed();
     }
 
@@ -1128,7 +1128,7 @@ mod tests {
                             MTLSize { width: THREADGROUP_THREADS.min(pipeline.maxTotalThreadsPerThreadgroup()), height: 1, depth: 1 },
                         );
                         encoder.end_encoding();
-                        command.commit();
+                        command.commit().unwrap();
                         command.wait_until_completed();
                         assert_eq!(command.status(), MTLCommandBufferStatus::Completed, "{:?}", command.error());
                         let actual = context.download(&output).unwrap();
@@ -1216,7 +1216,7 @@ mod tests {
                         MTLSize { width: THREADGROUP_THREADS.min(pipeline.maxTotalThreadsPerThreadgroup()), height: 1, depth: 1 },
                     );
                     encoder.end_encoding();
-                    command.commit();
+                    command.commit().unwrap();
                     command.wait_until_completed();
                     assert_eq!(command.status(), MTLCommandBufferStatus::Completed, "{:?}", command.error());
                     let bytes = context.download(&result).unwrap();

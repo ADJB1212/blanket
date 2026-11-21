@@ -209,7 +209,7 @@ impl CommandBuffer {
         self.completion.lock().unwrap_or_else(|error| error.into_inner()).error.clone()
     }
 
-    pub(super) fn commit(self: &Arc<Self>) {
+    pub(super) fn commit(self: &Arc<Self>) -> Result<(), GpuError> {
         let mut completion = self.completion.lock().unwrap_or_else(|error| error.into_inner());
         assert_eq!(completion.status, MTLCommandBufferStatus::NotEnqueued);
         completion.status = MTLCommandBufferStatus::Committed;
@@ -226,8 +226,8 @@ impl CommandBuffer {
         storage.buffer.endCommandBuffer();
         if let Some(error) = self.error() {
             drop(submission);
-            self.complete(Some(error));
-            return;
+            self.complete(Some(error.clone()));
+            return Err(error);
         }
         let command = Arc::clone(self);
         let feedback = RcBlock::new(move |feedback: NonNull<ProtocolObject<dyn MTL4CommitFeedback>>| {
@@ -249,6 +249,7 @@ impl CommandBuffer {
             self.queue.commit_count_options(NonNull::from(&mut buffer), 1, &options);
         }
         drop(submission);
+        Ok(())
     }
 
     fn complete(&self, error: Option<GpuError>) {
@@ -378,6 +379,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn commit_returns_encoding_errors_and_finishes_the_command() {
+        let Some(context) = super::super::test_context() else { return };
+        let command = context.queue.command_buffer().unwrap();
+        command.encoding_error(GpuError::allocation("control allocation failed"));
+        assert_eq!(command.commit().unwrap_err().kind(), blanket_gpu::GpuErrorKind::Allocation);
+        command.wait_until_completed();
+        assert_eq!(command.status(), MTLCommandBufferStatus::Error);
+    }
+
+    #[test]
     fn completed_submission_storage_is_reused_without_changing_completion_records() {
         let Some(context) = super::super::test_context() else { return };
         let command = context.queue.command_buffer().unwrap();
@@ -388,7 +399,7 @@ mod tests {
             drop(submission);
             identity
         };
-        command.commit();
+        command.commit().unwrap();
         command.wait_until_completed();
         let next = context.queue.command_buffer().unwrap();
         {
@@ -399,7 +410,7 @@ mod tests {
         }
         assert_eq!(command.status(), MTLCommandBufferStatus::Completed);
         assert_eq!(next.status(), MTLCommandBufferStatus::NotEnqueued);
-        next.commit();
+        next.commit().unwrap();
         next.wait_until_completed();
         assert_eq!(command.status(), MTLCommandBufferStatus::Completed);
     }
@@ -409,7 +420,7 @@ mod tests {
         let Some(context) = super::super::test_context() else { return };
         let commands: Vec<_> = (0..MAX_CACHED_SUBMISSIONS + 3).map(|_| context.queue.command_buffer().unwrap()).collect();
         for command in &commands {
-            command.commit();
+            command.commit().unwrap();
         }
         for command in commands {
             command.wait_until_completed();
@@ -422,7 +433,7 @@ mod tests {
         // SAFETY: The live byte slice covers the copied controls and slot 3 is valid.
         unsafe { encoder.set_bytes(NonNull::from(controls.as_slice()).cast(), controls.len(), 3) };
         encoder.end_encoding();
-        command.commit();
+        command.commit().unwrap();
         command.wait_until_completed();
         assert_eq!(command.status(), MTLCommandBufferStatus::Completed);
         assert!(context.queue.state.storage.lock().unwrap().is_empty());
