@@ -107,6 +107,12 @@ impl DecodeError {
         self
     }
 
+    /// Add decode context while retaining the category and native cause.
+    pub fn with_context(mut self, context: impl std::fmt::Display) -> Self {
+        self.message = format!("{context}: {}", self.message);
+        self
+    }
+
     /// Retain a native cause that can safely cross a detached Python call.
     pub fn with_source(error: impl std::error::Error + Send + Sync + pyo3::marker::Ungil + 'static) -> Self {
         let mut result = Self::from(error.to_string());

@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::io::Cursor;
 
-use blanket_codec_common::{DecodeError, SaveOptions, codec_error, decode_checkpoint, u16_bytes, validate_dimensions};
+use blanket_codec_common::{CodecErrorKind, DecodeError, SaveOptions, codec_error, decode_checkpoint, u16_bytes, validate_dimensions};
 use blanket_codec_image::{color_type, decode_rust_image};
 use blanket_core::progress::Progress;
 use blanket_core::{Image, PixelMode};
@@ -18,11 +18,11 @@ pub fn decode_region(data: &[u8], bounds: (u32, u32, u32, u32)) -> Result<Option
 
 pub fn decode_region_with_progress(data: &[u8], bounds: (u32, u32, u32, u32), progress: &Progress) -> Result<Option<Image>, DecodeError> {
     use tiff::tags::Tag;
-    let mut decoder = tiff::decoder::Decoder::new(Cursor::new(data)).map_err(|e| e.to_string())?;
+    let mut decoder = tiff::decoder::Decoder::new(Cursor::new(data)).map_err(DecodeError::with_diagnostic_source)?;
     if decoder.get_tag_u32(Tag::Orientation).is_ok_and(|value| (2..=8).contains(&value)) {
         return Ok(None);
     }
-    let (width, height) = decoder.dimensions().map_err(|e| e.to_string())?;
+    let (width, height) = decoder.dimensions().map_err(DecodeError::with_diagnostic_source)?;
     validate_dimensions(width, height)?;
     let (left, top, right, bottom) = bounds;
     if left >= right || top >= bottom || right > width || bottom > height {
@@ -35,7 +35,7 @@ pub fn decode_region_with_progress(data: &[u8], bounds: (u32, u32, u32, u32), pr
     {
         return Ok(None);
     }
-    let (mode, depth) = match decoder.colortype().map_err(|e| e.to_string())? {
+    let (mode, depth) = match decoder.colortype().map_err(DecodeError::with_diagnostic_source)? {
         tiff::ColorType::Gray(8) => (PixelMode::L, 8),
         tiff::ColorType::Gray(16) => (PixelMode::I16, 16),
         tiff::ColorType::RGB(d @ (8 | 16)) => (PixelMode::Rgb, d),
@@ -50,11 +50,14 @@ pub fn decode_region_with_progress(data: &[u8], bounds: (u32, u32, u32, u32), pr
     let stride = mode.channels() * (depth as usize / 8);
     let ow = (right - left) as usize;
     decode_checkpoint(progress)?;
-    let mut pixels = blanket_core::raster::alloc_pixels(ow * (bottom - top) as usize * stride).map_err(|e| e.to_string())?;
+    let mut pixels = blanket_core::raster::alloc_pixels(ow * (bottom - top) as usize * stride)
+        .map_err(|error| DecodeError::with_source(error).with_kind(CodecErrorKind::ResourceLimit))?;
     for cy in top / ch..=(bottom - 1) / ch {
         for cx in left / cw..=(right - 1) / cw {
             let index = cy * across + cx;
-            let decoded = decoder.read_chunk(index).map_err(|e| e.to_string())?;
+            let decoded = decoder
+                .read_chunk(index)
+                .map_err(|error| DecodeError::with_diagnostic_source(error).with_context(format_args!("TIFF chunk {index}")))?;
             let byte_count = match &decoded {
                 tiff::decoder::DecodingResult::U8(v) => v.len(),
                 tiff::decoder::DecodingResult::U16(v) => v.len() * 2,
@@ -94,7 +97,7 @@ pub fn decode_region_with_progress(data: &[u8], bounds: (u32, u32, u32, u32), pr
     } else {
         Image::from_sample_bytes(right - left, bottom - top, mode, pixels, depth, Some("TIFF".into()))
     };
-    result.map(Some).map_err(|e| e.to_string().into())
+    result.map(Some).map_err(DecodeError::with_source)
 }
 
 pub fn inspect(data: &[u8]) -> Result<blanket_codec_common::ImageHeader, String> {
@@ -863,6 +866,12 @@ pub fn encode_wide_tiff(image: &Image) -> PyResult<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn region_decode_preserves_native_errors() {
+        let error = decode_region_with_progress(b"II", (0, 0, 1, 1), &Progress::default()).unwrap_err();
+        assert!(std::error::Error::source(&error).is_some());
+    }
 
     #[test]
     fn float_samples_borrow_only_aligned_native_storage() {
