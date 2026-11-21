@@ -95,7 +95,8 @@ def validate_qtables(value: object) -> list[list[int]] | None:
         for table in tables:
             if len(table) != 64:
                 raise TypeError("Invalid quantization table")
-            result.append(list(array.array("H", (index(item) for item in cast("list[int]", table)))))
+            values = table if type(table) in (list, tuple) else (index(item) for item in cast("list[int]", table))
+            result.append(list(array.array("H", values)))
     except TypeError as error:
         raise ValueError("Invalid quantization table") from error
     return result
