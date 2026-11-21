@@ -351,7 +351,8 @@ def autocontrast(image: Image.Image, cutoff: float | tuple[float, float] = 0, ig
     if len(tails) == 2 and all(isinstance(value, (int, float)) and 0 <= value <= 100 for value in tails) and isinstance(ignored, (tuple, list)) and all(isinstance(value, int) and -256 <= value < 256 for value in ignored):
         native_tone = preserve_tone and image.mode == "RGB" and image.bit_depth == 8
         source = image.convert("L") if preserve_tone and image.mode != "L" and not native_tone else image
-        native, key = ops_autocontrast(image._native, source._native, None if mask is None else mask._native, tails, ignored, native_tone, image._lut_transparency())
+        raster = image._native
+        native, key = ops_autocontrast(raster, raster if source is image else source._native, None if mask is None else mask._native, tails, ignored, native_tone, image._lut_transparency())
         return _tone_result(image, native, key)
     # Retain Python's permissive cutoff and index semantics outside the native fast path.
     source = image.convert("L") if preserve_tone and image.mode != "L" else image
