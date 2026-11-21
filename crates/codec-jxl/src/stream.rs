@@ -1,7 +1,7 @@
 use std::mem::MaybeUninit;
 use std::ptr;
 
-use blanket_codec_common::{DecodeError, validate_dimensions};
+use blanket_codec_common::{CodecErrorKind, DecodeError, validate_dimensions};
 use blanket_core::parallel::deterministic;
 use blanket_core::{Image, PixelMode};
 use jpegxl_rs::parallel::ParallelRunner;
@@ -48,6 +48,12 @@ impl Drop for JxlStreamDecoder {
 
 fn check(status: JxlDecoderStatus) -> Result<(), DecodeError> {
     if status == JxlDecoderStatus::Success { Ok(()) } else { Err("JPEG XL streaming decoder error".into()) }
+}
+
+fn reserve_pixels(size: usize) -> Result<Vec<u8>, DecodeError> {
+    let mut pixels = Vec::new();
+    pixels.try_reserve_exact(size).map_err(|error| DecodeError::with_source(error).with_kind(CodecErrorKind::ResourceLimit))?;
+    Ok(pixels)
 }
 
 impl JxlStreamDecoder {
@@ -164,7 +170,8 @@ impl JxlStreamDecoder {
                 JxlDecoderStatus::NeedImageOutBuffer => unsafe {
                     let mut size = 0;
                     check(JxlDecoderImageOutBufferSize(self.decoder, &raw const self.format, &raw mut size))?;
-                    self.pixels = vec![0; size];
+                    self.pixels = reserve_pixels(size)?;
+                    self.pixels.resize(size, 0);
                     check(JxlDecoderSetImageOutBuffer(self.decoder, &raw const self.format, self.pixels.as_mut_ptr().cast(), size))?;
                 },
                 // SAFETY: the registered output buffer remains allocated during flushing.
@@ -183,7 +190,13 @@ impl JxlStreamDecoder {
             return Ok(None);
         }
         if self.preview.is_none() {
-            let pixels = if self.complete { self.take_output() } else { self.pixels.clone() };
+            let pixels = if self.complete {
+                self.take_output()
+            } else {
+                let mut pixels = reserve_pixels(self.pixels.len())?;
+                pixels.extend_from_slice(&self.pixels);
+                pixels
+            };
             self.preview = Some(self.output_image(pixels)?);
         }
         Ok(self.preview.clone())

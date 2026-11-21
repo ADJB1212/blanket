@@ -101,6 +101,12 @@ impl DecodeError {
         self.kind
     }
 
+    /// Set an explicit category when the native error carries no codec classification.
+    pub fn with_kind(mut self, kind: CodecErrorKind) -> Self {
+        self.kind = kind;
+        self
+    }
+
     /// Retain a native cause that can safely cross a detached Python call.
     pub fn with_source(error: impl std::error::Error + Send + Sync + pyo3::marker::Ungil + 'static) -> Self {
         let mut result = Self::from(error.to_string());

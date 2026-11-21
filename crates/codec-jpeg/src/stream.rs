@@ -71,7 +71,9 @@ impl std::fmt::Debug for JpegStreamDecoder {
 
 impl JpegStreamDecoder {
     pub fn new() -> Result<Self, String> {
-        Ok(Self { input: Vec::with_capacity(INPUT_LIMIT), .. })
+        let mut input = Vec::new();
+        input.try_reserve_exact(INPUT_LIMIT).map_err(|error| format!("JPEG streaming input memory limit exceeded: {error}"))?;
+        Ok(Self { input, .. })
     }
 
     pub fn feed(&mut self, data: &[u8]) -> Result<(), String> {
@@ -233,7 +235,9 @@ impl JpegStreamDecoder {
         for component in &mut components {
             component.blocks_x = mcus_x * usize::from(component.h_sampling);
             component.blocks_y = mcus_y * usize::from(component.v_sampling);
-            component.blocks = vec![[0; 64]; component.blocks_x * component.blocks_y];
+            let count = component.blocks_x.checked_mul(component.blocks_y).ok_or("JPEG coefficient dimensions overflow addressable memory")?;
+            component.blocks.try_reserve_exact(count).map_err(|error| format!("JPEG coefficient memory limit exceeded: {error}"))?;
+            component.blocks.resize(count, [0; 64]);
         }
         self.progressive = marker == 0xc2;
         self.coefficients = Some(JpegCoefficients {
