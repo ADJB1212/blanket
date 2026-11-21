@@ -51,6 +51,15 @@ def test_point_maps_transparency_with_the_pixel_lookup(shared_table: bool) -> No
     assert result.convert("RGBA").getchannel("A").tobytes() == b"\x00\xff"
 
 
+def test_identity_point_tables_preserve_transparency_and_copy_on_write() -> None:
+    source = Image.new("RGB", (9, 7), (47, 68, 89))
+    source.info["transparency"] = (47, 68, 89)
+    result = source.point(list(range(256)) * 3)
+    assert result == source
+    result.putpixel((0, 0), (1, 2, 3))
+    assert source.getpixel((0, 0)) == (47, 68, 89)
+
+
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA", "P"])
 def test_channels_and_point(mode: str) -> None:
     data = bytes((i * 37) % 256 for i in range(63 * len(mode)))
