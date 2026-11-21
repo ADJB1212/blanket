@@ -6,7 +6,7 @@ version=$2
 prefix="$HOME/deps/$name"
 source_dir="$RUNNER_TEMP/$name"
 shared_ext=so
-if [[ "$RUNNER_OS" == macOS ]]; then
+if [[ $RUNNER_OS == macOS ]]; then
 	shared_ext=dylib
 fi
 case "$RUNNER_ARCH" in
@@ -15,7 +15,7 @@ X64)
 	export CXXFLAGS="${CXXFLAGS:-} -O3 -march=x86-64 -mtune=generic"
 	;;
 ARM64)
-	if [[ "$RUNNER_OS" == macOS ]]; then
+	if [[ $RUNNER_OS == macOS ]]; then
 		export CFLAGS="${CFLAGS:-} -O3 -arch arm64 -mcpu=apple-m1"
 		export CXXFLAGS="${CXXFLAGS:-} -O3 -arch arm64 -mcpu=apple-m1"
 	else
@@ -55,46 +55,28 @@ libjxl)
 	repository=https://github.com/libjxl/libjxl.git
 	clone_flags=(--recursive --shallow-submodules)
 	;;
-lcms2)
-	repository=https://github.com/mm2/Little-CMS.git
-	clone_flags=(--depth 1)
-	;;
 *)
 	echo "Unknown dependency: $name" >&2
 	exit 1
 	;;
 esac
 
-if [[ -n "${BLANKET_SOURCE_ROOT:-}" ]]; then
+if [[ -n ${BLANKET_SOURCE_ROOT:-} ]]; then
 	cp -R "$BLANKET_SOURCE_ROOT/$name" "$source_dir"
 else
 	git clone --branch "$version" "${clone_flags[@]}" "$repository" "$source_dir"
-	printf '%s\n' "$repository" "$version" >"$source_dir/SOURCE.txt"
-	git -C "$source_dir" rev-parse HEAD >>"$source_dir/SOURCE.txt"
-	git -C "$source_dir" submodule status --recursive >>"$source_dir/SOURCE.txt"
 fi
-mkdir -p "$prefix/share/blanket-sources"
-cp "$source_dir/SOURCE.txt" "$prefix/share/blanket-sources/$name.txt"
-tar --exclude=.git -czf "$prefix/share/blanket-sources/$name.tar.gz" -C "$RUNNER_TEMP" "$name"
 bash scripts/collect_release_licenses.sh "$source_dir" "$prefix/share/blanket-licenses/$name"
 
 case "$name" in
-lcms2)
-	meson setup "$source_dir/build" "$source_dir" \
-		-Dtests=disabled -Dutils=false -Djpeg=disabled -Dtiff=disabled \
-		--prefix="$prefix" --libdir=lib --buildtype=release --default-library=shared \
-		-Dthreaded=true -Dfastfloat=true
-	ninja -C "$source_dir/build" install
-	exit 0
-	;;
 x265)
 	x265_neon_flag=()
-	if [[ "$RUNNER_ARCH" == "ARM64" ]]; then
+	if [[ $RUNNER_ARCH == "ARM64" ]]; then
 		x265_neon_flag=(-DHAVE_NEON=1)
 	fi
 	for depth in 12 10; do
 		main12=OFF
-		if [[ "$depth" == 12 ]]; then main12=ON; fi
+		if [[ $depth == 12 ]]; then main12=ON; fi
 		cmake -S "$source_dir/source" -B "$source_dir/build-$depth" -G Ninja \
 			-DCMAKE_BUILD_TYPE=Release -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
 			-DHIGH_BIT_DEPTH=ON -DENABLE_HDR10_PLUS=ON -DMAIN12="$main12" \
@@ -160,7 +142,7 @@ libwebp)
 	;;
 libjxl)
 	libjxl_macos_flags=()
-	if [[ "$RUNNER_OS" == macOS ]]; then
+	if [[ $RUNNER_OS == macOS ]]; then
 		libjxl_macos_flags=(-DCMAKE_AR="$(brew --prefix llvm)/bin/llvm-ar" -DCMAKE_RANLIB="$(brew --prefix llvm)/bin/llvm-ranlib")
 	fi
 
@@ -182,6 +164,6 @@ esac
 
 cmake --build "$source_dir/build" --parallel
 cmake --install "$source_dir/build" --strip
-if [[ "$name" == libwebp ]]; then
+if [[ $name == libwebp ]]; then
 	PKG_CONFIG_PATH="$prefix/lib/pkgconfig" pkg-config --exists libwebp libwebpmux libwebpdemux
 fi

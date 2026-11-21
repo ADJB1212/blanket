@@ -150,5 +150,5 @@ If you're bringing a stopwatch, use a release build and follow the
 ## License
 
 Original source is [MIT](LICENSE). Official wheels bundle GPL components and
-ship as GPL-3.0-or-later, with third-party notices and corresponding source.
+ship as GPL-3.0-or-later, with third-party notices and license texts.
 Details are in [distribution licenses](THIRD_PARTY_LICENSES.md).

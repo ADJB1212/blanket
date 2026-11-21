@@ -28,7 +28,6 @@ jobs:
       libheif-version: ${{ steps.versions.outputs.libheif }}
       libwebp-version: ${{ steps.versions.outputs.libwebp }}
       libjxl-version: ${{ steps.versions.outputs.libjxl }}
-      lcms2-version: ${{ steps.versions.outputs.lcms2 }}
     steps:
       - name: Set codec versions
         id: versions
@@ -40,7 +39,6 @@ jobs:
           echo "libheif=v1.23.7" >> "$GITHUB_OUTPUT"
           echo "libwebp=v1.6.0" >> "$GITHUB_OUTPUT"
           echo "libjxl=v0.13.0" >> "$GITHUB_OUTPUT"
-          echo "lcms2=lcms2.20" >> "$GITHUB_OUTPUT"
 
   aom:
     needs: prepare
@@ -89,22 +87,14 @@ jobs:
       version: ${{ needs.prepare.outputs.libwebp-version }}
 
   libjxl:
-    needs: [prepare, lcms2]
+    needs: prepare
     uses: ./.github/workflows/build-libjxl.yml
     with:
       runner: ubuntu-26.04
       version: ${{ needs.prepare.outputs.libjxl-version }}
-      lcms2-version: ${{ needs.prepare.outputs.lcms2-version }}
-
-  lcms2:
-    needs: prepare
-    uses: ./.github/workflows/build-lcms2.yml
-    with:
-      runner: ubuntu-26.04
-      version: ${{ needs.prepare.outputs.lcms2-version }}
 
   benchmark:
-    needs: [prepare, libheif, libwebp, libjxl, lcms2]
+    needs: [prepare, libheif, libwebp, libjxl]
     timeout-minutes: 120
     runs-on: ubuntu-26.04
     container:
@@ -130,56 +120,49 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/x265
-          key: sources-v1-x265-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.x265-version }}
+          key: licenses-v1-x265-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.x265-version }}
           fail-on-cache-miss: true
 
       - name: Restore dav1d
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/dav1d
-          key: sources-v1-dav1d-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.dav1d-version }}
+          key: licenses-v1-dav1d-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.dav1d-version }}
           fail-on-cache-miss: true
 
       - name: Restore aom
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/aom
-          key: sources-v1-aom-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.aom-version }}
+          key: licenses-v1-aom-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.aom-version }}
           fail-on-cache-miss: true
 
       - name: Restore libde265
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/libde265
-          key: sources-v1-libde265-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libde265-version }}
+          key: licenses-v1-libde265-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libde265-version }}
           fail-on-cache-miss: true
 
       - name: Restore libheif
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/libheif
-          key: sources-v1-libheif-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libheif-version }}-${{ needs.prepare.outputs.aom-version }}-${{ needs.prepare.outputs.x265-version }}-${{ needs.prepare.outputs.libde265-version }}-${{ needs.prepare.outputs.dav1d-version }}
+          key: licenses-v1-libheif-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libheif-version }}-${{ needs.prepare.outputs.aom-version }}-${{ needs.prepare.outputs.x265-version }}-${{ needs.prepare.outputs.libde265-version }}-${{ needs.prepare.outputs.dav1d-version }}
           fail-on-cache-miss: true
 
       - name: Restore libwebp
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/libwebp
-          key: sources-v1-libwebp-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libwebp-version }}
+          key: licenses-v1-libwebp-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libwebp-version }}
           fail-on-cache-miss: true
 
       - name: Restore libjxl
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/libjxl
-          key: sources-v1-libjxl-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libjxl-version }}
-          fail-on-cache-miss: true
-
-      - name: Restore LCMS2
-        uses: actions/cache/restore@v6
-        with:
-          path: ~/deps/lcms2
-          key: sources-v1-lcms2-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.lcms2-version }}
+          key: licenses-v1-libjxl-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libjxl-version }}
           fail-on-cache-miss: true
 
       - name: Install Rust
@@ -202,14 +185,13 @@ jobs:
           echo "$HOME/deps/libheif/bin" >> "$GITHUB_PATH"
           echo "$HOME/deps/libwebp/bin" >> "$GITHUB_PATH"
           echo "$HOME/deps/libjxl/bin" >> "$GITHUB_PATH"
-          echo "LCMS2_LIB_DIR=$HOME/deps/lcms2/lib" >> "$GITHUB_ENV"
-          echo "LCMS2_INCLUDE_DIR=$HOME/deps/lcms2/include" >> "$GITHUB_ENV"
+          echo "LCMS2_STATIC=1" >> "$GITHUB_ENV"
 
-          echo "PKG_CONFIG_PATH=$HOME/deps/dav1d/lib/pkgconfig:$HOME/deps/aom/lib/pkgconfig:$HOME/deps/x265/lib/pkgconfig:$HOME/deps/libde265/lib/pkgconfig:$HOME/deps/libheif/lib/pkgconfig:$HOME/deps/libwebp/lib/pkgconfig:$HOME/deps/libjxl/lib/pkgconfig:$HOME/deps/lcms2/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=$HOME/deps/dav1d/lib/pkgconfig:$HOME/deps/aom/lib/pkgconfig:$HOME/deps/x265/lib/pkgconfig:$HOME/deps/libde265/lib/pkgconfig:$HOME/deps/libheif/lib/pkgconfig:$HOME/deps/libwebp/lib/pkgconfig:$HOME/deps/libjxl/lib/pkgconfig" >> "$GITHUB_ENV"
 
           echo "CMAKE_PREFIX_PATH=$HOME/deps/dav1d:$HOME/deps/aom:$HOME/deps/x265:$HOME/deps/libde265:$HOME/deps/libheif:$HOME/deps/libwebp:$HOME/deps/libjxl" >> "$GITHUB_ENV"
 
-          echo "LD_LIBRARY_PATH=$HOME/deps/lcms2/lib:$HOME/deps/dav1d/lib:$HOME/deps/aom/lib:$HOME/deps/x265/lib:$HOME/deps/libde265/lib:$HOME/deps/libheif/lib:$HOME/deps/libwebp/lib:$HOME/deps/libjxl/lib" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$HOME/deps/dav1d/lib:$HOME/deps/aom/lib:$HOME/deps/x265/lib:$HOME/deps/libde265/lib:$HOME/deps/libheif/lib:$HOME/deps/libwebp/lib:$HOME/deps/libjxl/lib" >> "$GITHUB_ENV"
 
       - name: Install project and benchmark dependencies
         run: |

@@ -11,10 +11,12 @@ while IFS= read -r -d '' notice; do
 	cp "$notice" "$destination/$relative"
 	count=$((count + 1))
 done < <(find "$source_root" -type f \
+	! -iname '*.rs' ! -iname '*.c' ! -iname '*.h' ! -iname '*.cc' ! -iname '*.cpp' \
+	! -iname '*.py' ! -iname '*.js' ! -iname '*.ts' ! -iname '*.java' ! -iname '*.sh' \
 	\( -iname '*license*' -o -iname '*copying*' -o -iname '*notice*' \
 	-o -iname '*copyright*' -o -iname 'authors*' -o -iname 'patents*' \
 	-o -iname 'unlicense*' -o -name 'README.ijg' \) -print0)
-if [[ "$count" == 0 ]]; then
+if [[ $count == 0 && ${3:-} != --allow-empty ]]; then
 	echo "No license files found in $source_root" >&2
 	exit 1
 fi

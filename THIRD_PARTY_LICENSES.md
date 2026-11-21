@@ -20,15 +20,6 @@ The binary wheels include complete third-party license and notice files under
 their `.dist-info/licenses/licenses/third-party/` directory. This includes
 the Rust dependency notices and notices for nested native dependencies.
 
-Matching complete source archives named `pyblanket-sources-*.tar.bz2` are
-provided alongside the wheels at
-<https://github.com/ADJB1212/blanket/releases>. Select the release matching
-the installed package version. These archives contain Blanket's source,
-the locked Cargo dependency sources, the native dependency sources (including
-submodules), provenance, licenses, and build scripts. See `RELEASE_SOURCES.md`
-in the archive's project directory for rebuild instructions. The publishing
-workflow requires these archives to be publicly available before PyPI upload.
-
 Pre-built binary release wheels bundle or link against the following native
 codec dependencies:
 
@@ -46,8 +37,8 @@ codec dependencies:
 This software is based in part on the work of the Independent JPEG Group.
 JPEG XL's nested dependencies include Brotli (MIT), Highway (Apache-2.0),
 and LittleCMS (MIT). AVIF encoding also uses rav1e (BSD-2-Clause), and AVIF
-container parsing uses mp4parse (MPL-2.0). The generated notice directory and
-Cargo metadata in the corresponding-source archive provide the full inventory.
+container parsing uses mp4parse (MPL-2.0). The generated notice directory
+contains the dependency license files.
 
 Outline font rendering and layout also use these Rust dependencies:
 
@@ -60,10 +51,10 @@ Source: https://github.com/dhepper/font8x8/blob/master/font8x8_basic.h
 - ttf-parser and owned_ttf_parser: MIT OR Apache-2.0
 - unicode-bidi and unicode-script: MIT OR Apache-2.0
 
-Their full license texts accompany the wheels and corresponding-source archives.
+Their full license texts accompany the wheels.
 
 Perceptual quality scoring uses ssimulacra2 (BSD-2-Clause), with yuvxyb and
-yuvxyb-math (MIT). Their license texts accompany the wheels and source archives.
+yuvxyb-math (MIT). Their license texts accompany the wheels.
 
 Phase-correlation alignment uses RustFFT (MIT OR Apache-2.0) with its
 architecture-specific SIMD features disabled. Blanket's sample preparation and

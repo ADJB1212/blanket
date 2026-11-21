@@ -9,9 +9,6 @@ on:
       version:
         required: true
         type: string
-      lcms2-version:
-        required: true
-        type: string
 env:
   DO_NOT_TRACK: "1"
   HOMEBREW_NO_ENV_HINTS: "1"
@@ -37,7 +34,7 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/libjxl
-          key: sources-v1-libjxl-${{ runner.os }}-${{ runner.arch }}-${{ inputs.version }}
+          key: licenses-v1-libjxl-${{ runner.os }}-${{ runner.arch }}-${{ inputs.version }}
       - name: Configure macOS toolchain
         if: runner.os == 'macOS' && steps.cache.outputs.cache-hit != 'true'
         run: |

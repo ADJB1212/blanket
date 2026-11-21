@@ -37,10 +37,6 @@ jobs:
             --dir dist \
             --pattern "*.whl" \
             --pattern "*.tar.gz"
-          gh release download "$RELEASE_TAG" \
-            --repo "$GITHUB_REPOSITORY" \
-            --dir sources \
-            --pattern "pyblanket-sources-*.tar.bz2"
 
       - name: Show distributions
         run: ls -lh dist/

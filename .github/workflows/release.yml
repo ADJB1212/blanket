@@ -21,6 +21,7 @@ env:
   HOMEBREW_NO_ASK: "1"
   HOMEBREW_NO_DEPRECATED_WARNINGS: "1"
   MACOSX_DEPLOYMENT_TARGET: "26.0"
+  LCMS2_STATIC: "1"
 
 permissions:
   contents: write
@@ -37,7 +38,6 @@ jobs:
       libheif-version: ${{ steps.versions.outputs.libheif }}
       libwebp-version: ${{ steps.versions.outputs.libwebp }}
       libjxl-version: ${{ steps.versions.outputs.libjxl }}
-      lcms2-version: ${{ steps.versions.outputs.lcms2 }}
     steps:
       - name: Set codec versions
         id: versions
@@ -49,7 +49,6 @@ jobs:
           echo "libheif=v1.23.7" >> "$GITHUB_OUTPUT"
           echo "libwebp=v1.6.0" >> "$GITHUB_OUTPUT"
           echo "libjxl=v0.13.0" >> "$GITHUB_OUTPUT"
-          echo "lcms2=lcms2.20" >> "$GITHUB_OUTPUT"
       - name: Ensure release exists
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -152,21 +151,9 @@ jobs:
     with:
       runner: ${{ matrix.runner }}
       version: ${{ needs.prepare.outputs.libjxl-version }}
-      lcms2-version: ${{ needs.prepare.outputs.lcms2-version }}
-
-  lcms2:
-    needs: prepare
-    strategy:
-      fail-fast: false
-      matrix:
-        runner: [ubuntu-26.04, ubuntu-26.04-arm, macos-latest]
-    uses: ./.github/workflows/build-lcms2.yml
-    with:
-      runner: ${{ matrix.runner }}
-      version: ${{ needs.prepare.outputs.lcms2-version }}
 
   linux:
-    needs: [prepare, libheif, libwebp, libjxl, lcms2]
+    needs: [prepare, libheif, libwebp, libjxl]
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -198,7 +185,7 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target
-          key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ matrix.target }}-source-codecs-${{ needs.prepare.outputs.aom-version }}-${{ needs.prepare.outputs.x265-version }}-${{ needs.prepare.outputs.libde265-version }}-${{ needs.prepare.outputs.dav1d-version }}-${{ needs.prepare.outputs.libheif-version }}-${{ needs.prepare.outputs.libwebp-version }}-${{ needs.prepare.outputs.libjxl-version }}-${{ needs.prepare.outputs.lcms2-version }}-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ matrix.target }}-source-codecs-${{ needs.prepare.outputs.aom-version }}-${{ needs.prepare.outputs.x265-version }}-${{ needs.prepare.outputs.libde265-version }}-${{ needs.prepare.outputs.dav1d-version }}-${{ needs.prepare.outputs.libheif-version }}-${{ needs.prepare.outputs.libwebp-version }}-${{ needs.prepare.outputs.libjxl-version }}-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
       - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d
         with:
           version: "latest"
@@ -219,59 +206,51 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/aom
-          key: sources-v1-aom-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.aom-version }}
+          key: licenses-v1-aom-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.aom-version }}
           fail-on-cache-miss: true
       - name: Restore x265
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/x265
-          key: sources-v1-x265-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.x265-version }}
+          key: licenses-v1-x265-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.x265-version }}
           fail-on-cache-miss: true
       - name: Restore libde265
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/libde265
-          key: sources-v1-libde265-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libde265-version }}
+          key: licenses-v1-libde265-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libde265-version }}
           fail-on-cache-miss: true
       - name: Restore dav1d
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/dav1d
-          key: sources-v1-dav1d-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.dav1d-version }}
+          key: licenses-v1-dav1d-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.dav1d-version }}
           fail-on-cache-miss: true
       - name: Restore libheif
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/libheif
-          key: sources-v1-libheif-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libheif-version }}-${{ needs.prepare.outputs.aom-version }}-${{ needs.prepare.outputs.x265-version }}-${{ needs.prepare.outputs.libde265-version }}-${{ needs.prepare.outputs.dav1d-version }}
+          key: licenses-v1-libheif-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libheif-version }}-${{ needs.prepare.outputs.aom-version }}-${{ needs.prepare.outputs.x265-version }}-${{ needs.prepare.outputs.libde265-version }}-${{ needs.prepare.outputs.dav1d-version }}
           fail-on-cache-miss: true
       - name: Restore libwebp
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/libwebp
-          key: sources-v1-libwebp-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libwebp-version }}
+          key: licenses-v1-libwebp-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libwebp-version }}
           fail-on-cache-miss: true
       - name: Restore libjxl
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/libjxl
-          key: sources-v1-libjxl-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libjxl-version }}
-          fail-on-cache-miss: true
-      - name: Restore LCMS2
-        uses: actions/cache/restore@v6
-        with:
-          path: ~/deps/lcms2
-          key: sources-v1-lcms2-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.lcms2-version }}
+          key: licenses-v1-libjxl-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libjxl-version }}
           fail-on-cache-miss: true
 
       - name: Setup codec paths
         run: |
-          echo "LCMS2_LIB_DIR=$HOME/deps/lcms2/lib" >> "$GITHUB_ENV"
-          echo "LCMS2_INCLUDE_DIR=$HOME/deps/lcms2/include" >> "$GITHUB_ENV"
-          echo "PKG_CONFIG_PATH=$HOME/deps/dav1d/lib/pkgconfig:$HOME/deps/aom/lib/pkgconfig:$HOME/deps/x265/lib/pkgconfig:$HOME/deps/libde265/lib/pkgconfig:$HOME/deps/libheif/lib/pkgconfig:$HOME/deps/libwebp/lib/pkgconfig:$HOME/deps/libjxl/lib/pkgconfig:$HOME/deps/lcms2/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=$HOME/deps/dav1d/lib/pkgconfig:$HOME/deps/aom/lib/pkgconfig:$HOME/deps/x265/lib/pkgconfig:$HOME/deps/libde265/lib/pkgconfig:$HOME/deps/libheif/lib/pkgconfig:$HOME/deps/libwebp/lib/pkgconfig:$HOME/deps/libjxl/lib/pkgconfig" >> "$GITHUB_ENV"
           echo "CMAKE_PREFIX_PATH=$HOME/deps/dav1d:$HOME/deps/aom:$HOME/deps/x265:$HOME/deps/libde265:$HOME/deps/libheif:$HOME/deps/libwebp:$HOME/deps/libjxl" >> "$GITHUB_ENV"
-          echo "LD_LIBRARY_PATH=$HOME/deps/lcms2/lib:$HOME/deps/dav1d/lib:$HOME/deps/aom/lib:$HOME/deps/x265/lib:$HOME/deps/libde265/lib:$HOME/deps/libheif/lib:$HOME/deps/libwebp/lib:$HOME/deps/libjxl/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
-          echo "DYLD_LIBRARY_PATH=$HOME/deps/lcms2/lib:$HOME/deps/dav1d/lib:$HOME/deps/aom/lib:$HOME/deps/x265/lib:$HOME/deps/libde265/lib:$HOME/deps/libheif/lib:$HOME/deps/libwebp/lib:$HOME/deps/libjxl/lib" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$HOME/deps/dav1d/lib:$HOME/deps/aom/lib:$HOME/deps/x265/lib:$HOME/deps/libde265/lib:$HOME/deps/libheif/lib:$HOME/deps/libwebp/lib:$HOME/deps/libjxl/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+          echo "DYLD_LIBRARY_PATH=$HOME/deps/dav1d/lib:$HOME/deps/aom/lib:$HOME/deps/x265/lib:$HOME/deps/libde265/lib:$HOME/deps/libheif/lib:$HOME/deps/libwebp/lib:$HOME/deps/libjxl/lib" >> "$GITHUB_ENV"
       - name: Verify codec versions
         run: |
           pkg-config --modversion dav1d
@@ -281,11 +260,8 @@ jobs:
           pkg-config --modversion libheif
           pkg-config --modversion libwebp
           pkg-config --modversion libjxl
-          pkg-config --modversion lcms2
-      - name: Prepare licenses and corresponding source
-        env:
-          BLANKET_RELEASE_TAG: ${{ inputs.tag }}
-        run: bash scripts/prepare_release_sources.sh
+      - name: Prepare third-party licenses
+        run: bash scripts/prepare_release_licenses.sh
       - name: Build wheels
         id: build-wheel
         env:
@@ -325,12 +301,10 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: wheels-linux-${{ matrix.target }}
-          path: |
-            dist/*.whl
-            dist/*-sources-*.tar.bz2
+          path: dist/*.whl
 
   macos:
-    needs: [prepare, libheif, libwebp, libjxl, lcms2]
+    needs: [prepare, libheif, libwebp, libjxl]
     timeout-minutes: 60
     runs-on: macos-latest
     env:
@@ -348,7 +322,7 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target
-          key: ${{ runner.os }}-${{ runner.arch }}-cargo-source-codecs-${{ needs.prepare.outputs.aom-version }}-${{ needs.prepare.outputs.x265-version }}-${{ needs.prepare.outputs.libde265-version }}-${{ needs.prepare.outputs.dav1d-version }}-${{ needs.prepare.outputs.libheif-version }}-${{ needs.prepare.outputs.libwebp-version }}-${{ needs.prepare.outputs.libjxl-version }}-${{ needs.prepare.outputs.lcms2-version }}-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-cargo-source-codecs-${{ needs.prepare.outputs.aom-version }}-${{ needs.prepare.outputs.x265-version }}-${{ needs.prepare.outputs.libde265-version }}-${{ needs.prepare.outputs.dav1d-version }}-${{ needs.prepare.outputs.libheif-version }}-${{ needs.prepare.outputs.libwebp-version }}-${{ needs.prepare.outputs.libjxl-version }}-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
       - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
@@ -378,7 +352,7 @@ jobs:
           uv python install 3.12 3.13 3.15 3.14t 3.15t
       - name: Install build tools
         run: |
-          brew install llvm lld cmake ninja nasm pkg-config gcc
+          brew install llvm lld cmake ninja meson nasm pkg-config gcc
           echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
           echo "$(brew --prefix lld)/bin" >> "$GITHUB_PATH"
           echo "CC=$(brew --prefix llvm)/bin/clang" >> "$GITHUB_ENV"
@@ -389,58 +363,50 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/aom
-          key: sources-v1-aom-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.aom-version }}
+          key: licenses-v1-aom-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.aom-version }}
           fail-on-cache-miss: true
       - name: Restore x265
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/x265
-          key: sources-v1-x265-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.x265-version }}
+          key: licenses-v1-x265-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.x265-version }}
           fail-on-cache-miss: true
       - name: Restore libde265
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/libde265
-          key: sources-v1-libde265-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libde265-version }}
+          key: licenses-v1-libde265-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libde265-version }}
           fail-on-cache-miss: true
       - name: Restore dav1d
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/dav1d
-          key: sources-v1-dav1d-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.dav1d-version }}
+          key: licenses-v1-dav1d-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.dav1d-version }}
           fail-on-cache-miss: true
       - name: Restore libheif
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/libheif
-          key: sources-v1-libheif-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libheif-version }}-${{ needs.prepare.outputs.aom-version }}-${{ needs.prepare.outputs.x265-version }}-${{ needs.prepare.outputs.libde265-version }}-${{ needs.prepare.outputs.dav1d-version }}
+          key: licenses-v1-libheif-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libheif-version }}-${{ needs.prepare.outputs.aom-version }}-${{ needs.prepare.outputs.x265-version }}-${{ needs.prepare.outputs.libde265-version }}-${{ needs.prepare.outputs.dav1d-version }}
           fail-on-cache-miss: true
       - name: Restore libwebp
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/libwebp
-          key: sources-v1-libwebp-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libwebp-version }}
+          key: licenses-v1-libwebp-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libwebp-version }}
           fail-on-cache-miss: true
       - name: Restore libjxl
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/libjxl
-          key: sources-v1-libjxl-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libjxl-version }}
-          fail-on-cache-miss: true
-      - name: Restore LCMS2
-        uses: actions/cache/restore@v6
-        with:
-          path: ~/deps/lcms2
-          key: sources-v1-lcms2-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.lcms2-version }}
+          key: licenses-v1-libjxl-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libjxl-version }}
           fail-on-cache-miss: true
       - name: Setup codec paths
         run: |
-          echo "LCMS2_LIB_DIR=$HOME/deps/lcms2/lib" >> "$GITHUB_ENV"
-          echo "LCMS2_INCLUDE_DIR=$HOME/deps/lcms2/include" >> "$GITHUB_ENV"
-          echo "PKG_CONFIG_PATH=$HOME/deps/dav1d/lib/pkgconfig:$HOME/deps/aom/lib/pkgconfig:$HOME/deps/x265/lib/pkgconfig:$HOME/deps/libde265/lib/pkgconfig:$HOME/deps/libheif/lib/pkgconfig:$HOME/deps/libwebp/lib/pkgconfig:$HOME/deps/libjxl/lib/pkgconfig:$HOME/deps/lcms2/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=$HOME/deps/dav1d/lib/pkgconfig:$HOME/deps/aom/lib/pkgconfig:$HOME/deps/x265/lib/pkgconfig:$HOME/deps/libde265/lib/pkgconfig:$HOME/deps/libheif/lib/pkgconfig:$HOME/deps/libwebp/lib/pkgconfig:$HOME/deps/libjxl/lib/pkgconfig" >> "$GITHUB_ENV"
           echo "CMAKE_PREFIX_PATH=$HOME/deps/dav1d:$HOME/deps/aom:$HOME/deps/x265:$HOME/deps/libde265:$HOME/deps/libheif:$HOME/deps/libwebp:$HOME/deps/libjxl" >> "$GITHUB_ENV"
-          echo "LD_LIBRARY_PATH=$HOME/deps/lcms2/lib:$HOME/deps/dav1d/lib:$HOME/deps/aom/lib:$HOME/deps/x265/lib:$HOME/deps/libde265/lib:$HOME/deps/libheif/lib:$HOME/deps/libwebp/lib:$HOME/deps/libjxl/lib" >> "$GITHUB_ENV"
-          echo "DYLD_LIBRARY_PATH=$HOME/deps/lcms2/lib:$HOME/deps/dav1d/lib:$HOME/deps/aom/lib:$HOME/deps/x265/lib:$HOME/deps/libde265/lib:$HOME/deps/libheif/lib:$HOME/deps/libwebp/lib:$HOME/deps/libjxl/lib" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$HOME/deps/dav1d/lib:$HOME/deps/aom/lib:$HOME/deps/x265/lib:$HOME/deps/libde265/lib:$HOME/deps/libheif/lib:$HOME/deps/libwebp/lib:$HOME/deps/libjxl/lib" >> "$GITHUB_ENV"
+          echo "DYLD_LIBRARY_PATH=$HOME/deps/dav1d/lib:$HOME/deps/aom/lib:$HOME/deps/x265/lib:$HOME/deps/libde265/lib:$HOME/deps/libheif/lib:$HOME/deps/libwebp/lib:$HOME/deps/libjxl/lib" >> "$GITHUB_ENV"
       - name: Verify codec versions
         run: |
           pkg-config --modversion dav1d
@@ -450,11 +416,8 @@ jobs:
           pkg-config --modversion libheif
           pkg-config --modversion libwebp
           pkg-config --modversion libjxl
-          pkg-config --modversion lcms2
-      - name: Prepare licenses and corresponding source
-        env:
-          BLANKET_RELEASE_TAG: ${{ inputs.tag }}
-        run: bash scripts/prepare_release_sources.sh
+      - name: Prepare third-party licenses
+        run: bash scripts/prepare_release_licenses.sh
       - name: Build wheels
         id: build-wheel
         run: |
@@ -481,9 +444,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: wheels-macos-aarch64
-          path: |
-            dist/*.whl
-            dist/*-sources-*.tar.bz2
+          path: dist/*.whl
 
   sdist:
     needs: prepare
