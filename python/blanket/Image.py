@@ -922,7 +922,7 @@ class Image:
             native = self._native
         native.load()
         self._sync_palette()
-        return PixelAccess(self._native)
+        return PixelAccess(native)
 
     @property
     def __array_interface__(self) -> dict[str, object]:
