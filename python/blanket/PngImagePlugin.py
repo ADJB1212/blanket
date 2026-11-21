@@ -95,9 +95,9 @@ def sanitize_apng(data: bytes) -> tuple[bytes, BaseException | None, int | None]
             if not has_idat:
                 has_fctl_before_idat = True
             if need_data:
-                return bytes(_strip_apng(view, chunks)), _SYNTAX_ERROR("APNG missing frame data"), num_frames + int(has_idat and not has_fctl_before_idat)
+                return _strip_apng(view, chunks), _SYNTAX_ERROR("APNG missing frame data"), num_frames + int(has_idat and not has_fctl_before_idat)
             if len(payload) < 26 or int.from_bytes(payload[:4], "big") != expected_seq:
-                return bytes(_strip_apng(view, chunks)), _SYNTAX_ERROR("APNG contains frame sequence errors"), num_frames + int(has_idat and not has_fctl_before_idat)
+                return _strip_apng(view, chunks), _SYNTAX_ERROR("APNG contains frame sequence errors"), num_frames + int(has_idat and not has_fctl_before_idat)
             expected_seq += 1
             fctl_count += 1
             need_data = True
@@ -106,7 +106,7 @@ def sanitize_apng(data: bytes) -> tuple[bytes, BaseException | None, int | None]
             need_data = False
         elif cid == b"fdAT":
             if not fctl_count or len(payload) < 4 or int.from_bytes(payload[:4], "big") != expected_seq:
-                return bytes(_strip_apng(view, chunks)), _SYNTAX_ERROR("APNG contains frame sequence errors"), num_frames + int(has_idat and not has_fctl_before_idat)
+                return _strip_apng(view, chunks), _SYNTAX_ERROR("APNG contains frame sequence errors"), num_frames + int(has_idat and not has_fctl_before_idat)
             expected_seq += 1
             need_data = False
     total_frames = num_frames + int(has_idat and not has_fctl_before_idat)
@@ -114,9 +114,9 @@ def sanitize_apng(data: bytes) -> tuple[bytes, BaseException | None, int | None]
     if len(ihdr) >= 8 and int.from_bytes(ihdr[:4], "big") * int.from_bytes(ihdr[4:8], "big") * total_frames > _MAX_PIXELS:
         return data, None, None
     if need_data or fctl_count == 0:
-        return bytes(_strip_apng(view, chunks)), _SYNTAX_ERROR("APNG missing frame data"), total_frames
+        return _strip_apng(view, chunks), _SYNTAX_ERROR("APNG missing frame data"), total_frames
     if fctl_count < num_frames:
-        return bytes(_strip_apng(view, chunks)), OSError("no more images in APNG file"), total_frames
+        return _strip_apng(view, chunks), OSError("no more images in APNG file"), total_frames
     if fctl_count > num_frames and has_idat:
         output = bytearray(_MAGIC)
         for start, end, cid, payload in chunks:
@@ -161,13 +161,11 @@ class _Buffer:
         return len(data)
 
 
-def _strip_apng(view: memoryview, chunks: list[tuple[int, int, bytes, memoryview]]) -> bytearray:
+def _strip_apng(view: memoryview, chunks: list[tuple[int, int, bytes, memoryview]]) -> bytes:
     """Strip APNG animation chunks to produce a static PNG."""
-    output = bytearray(_MAGIC)
-    for start, end, cid, _ in chunks:
-        if cid not in (b"acTL", b"fcTL", b"fdAT"):
-            output.extend(view[start:end])
-    return output
+    parts = [view[: len(_MAGIC)]]
+    parts.extend(view[start:end] for start, end, cid, _ in chunks if cid not in (b"acTL", b"fcTL", b"fdAT"))
+    return b"".join(parts)
 
 
 class PngImageFile(PluginImage):
