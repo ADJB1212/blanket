@@ -343,25 +343,27 @@ fn ops_xbm_bits(image: &Image) -> PyResult<Vec<u8>> {
 
 #[pyfunction]
 fn ops_xbm<'py>(py: Python<'py>, image: &Image, name: &str) -> PyResult<Bound<'py, PyBytes>> {
-    let data = py.detach(|| {
-        let bits = ops_xbm_bits(image)?;
-        let mut result =
-            format!("#define {name}_width {}\n#define {name}_height {}\nstatic char {name}_bits[] = {{\n", image.width(), image.height())
-                .into_bytes();
-        result.reserve(bits.len() * 5 + 3);
-        const HEX: &[u8; 16] = b"0123456789abcdef";
-        for (i, value) in bits.into_iter().enumerate() {
-            if i != 0 {
-                result.push(b',');
+    let bits = py.detach(|| ops_xbm_bits(image))?;
+    let header = format!("#define {name}_width {}\n#define {name}_height {}\nstatic char {name}_bits[] = {{\n", image.width(), image.height());
+    let body_len = bits.len().checked_mul(5).map(|len| len.saturating_sub(1));
+    let len = body_len.and_then(|body| body.checked_add(header.len() + 3)).ok_or_else(|| PyOverflowError::new_err("XBM output is too large"))?;
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    PyBytes::new_with(py, len, |output| {
+        py.detach(|| {
+            let (prefix, rest) = output.split_at_mut(header.len());
+            prefix.copy_from_slice(header.as_bytes());
+            let (body, suffix) = rest.split_at_mut(rest.len() - 3);
+            suffix.copy_from_slice(b"\n};");
+            if let Some((&last, prefix)) = bits.split_last() {
+                let (blocks, tail) = body.as_chunks_mut::<5>();
+                for (&value, block) in prefix.iter().zip(blocks) {
+                    *block = [b'0', b'x', HEX[usize::from(value >> 4)], HEX[usize::from(value & 15)], b','];
+                }
+                tail.copy_from_slice(&[b'0', b'x', HEX[usize::from(last >> 4)], HEX[usize::from(last & 15)]]);
             }
-            result.extend_from_slice(b"0x");
-            result.push(HEX[usize::from(value >> 4)]);
-            result.push(HEX[usize::from(value & 15)]);
-        }
-        result.extend_from_slice(b"\n};");
-        Ok::<_, PyErr>(result)
-    })?;
-    Ok(PyBytes::new(py, &data))
+        });
+        Ok(())
+    })
 }
 
 #[pyfunction(signature = (image, values, key=None))]
