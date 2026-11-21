@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import struct
 
+import numpy as np
 import pytest
 from helpers import assert_image_properties, assert_raises, image_pair
 from PIL import Image as PillowImage
@@ -188,6 +189,26 @@ def test_raw_input_ignores_padding_and_does_not_require_final_padding():
     data[:] = bytes(7)
     assert image.tobytes() == bytes([3, 2, 1, 6, 5, 4])
     assert_raises(ValueError, lambda: Image.frombytes("RGB", (1, 2), bytes(6), "raw", "BGR", 4), match="not enough image data")
+
+
+@pytest.mark.parametrize("strided", [False, True])
+def test_frombytes_snapshots_numpy_buffer(strided: bool) -> None:
+    values = np.arange(60, dtype=np.uint8).reshape(4, 5, 3)
+    if strided:
+        values = values[::-1, ::-1]
+    expected = values.tobytes()
+    image = Image.frombytes("RGB", (5, 4), values)
+    values.fill(0)
+    assert image.tobytes() == expected
+
+
+def test_frombytes_honors_custom_bytes_on_buffer_objects() -> None:
+    class PixelBuffer(bytearray):
+        def __bytes__(self) -> bytes:
+            return b"\x10\x20\x30"
+
+    image = Image.frombytes("RGB", (1, 1), PixelBuffer(b"\x01\x02\x03"))
+    assert image.getpixel((0, 0)) == (16, 32, 48)
 
 
 @pytest.mark.parametrize(

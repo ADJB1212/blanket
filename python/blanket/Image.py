@@ -4379,14 +4379,18 @@ def frombytes(mode: str, size: tuple[int, int], data: object, decoder_name: str 
         image = Image.frombytes("RGB", (2, 1), bytes([255, 0, 0, 0, 255, 0]))
         ```
     """
-    buffer_input = decoder_name == "raw" and type(data) in (bytearray, memoryview)
+    raw_view = None
     try:
-        raw = memoryview(cast("Buffer", data)) if buffer_input else bytes(cast("BytesInput", data))
+        if decoder_name == "raw" and not isinstance(data, bytes) and not hasattr(type(data), "__bytes__"):
+            with suppress(TypeError):
+                raw_view = memoryview(cast("Buffer", data))
+        if raw_view is None:
+            raw = bytes(cast("BytesInput", data))
     except (TypeError, ValueError) as error:
         raise TypeError("data must be a bytes-like object") from error
     rawmode, stride, orientation = _raw_args(mode, "raw" if decoder_name in ("hex", "packbits") else decoder_name, args)
-    if buffer_input:
-        native = _native_frombuffer_copy("L" if mode == "P" else mode, size, raw, bit_depth, rawmode, stride, orientation)
+    if raw_view is not None:
+        native = _native_frombuffer_copy("L" if mode == "P" else mode, size, raw_view, bit_depth, rawmode, stride, orientation)
     else:
         native = _native_frombytes("L" if mode == "P" else mode, size, raw, bit_depth, rawmode, stride, orientation, decoder_name)
     result = Image(native)
