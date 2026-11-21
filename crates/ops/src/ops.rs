@@ -264,12 +264,12 @@ fn ops_entropy(py: Python<'_>, image: &Image, mask: Option<&Image>, extrema: Opt
 
 #[pyfunction]
 fn ops_spread(py: Python<'_>, image: &Image, distance: i64) -> PyResult<Image> {
+    let distance = distance.unsigned_abs().min(u64::from(image.width().max(image.height()))) as i64;
+    if distance == 0 || image.width() == 0 || image.height() == 0 || image.size() == (1, 1) {
+        return image.copy(py);
+    }
     let source = image.raw_data()?;
     let channels = image.raw_bytes_per_pixel();
-    let distance = distance.unsigned_abs().min(u64::from(image.width().max(image.height()))) as i64;
-    if distance == 0 || image.width() == 0 || image.height() == 0 {
-        return output(image, (image.width(), image.height()), py.detach(|| source.to_vec()));
-    }
     let mut state = deterministic_seed()
         .unwrap_or_else(|| std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64 | 1);
     let mut pixels = reserved_buffer((image.width(), image.height()), channels)?;
