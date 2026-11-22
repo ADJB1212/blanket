@@ -35,6 +35,35 @@ def test_native_outline_curves_preserve_position_and_transform():
     assert outline.edges[-1] == ((10, 19), (0, 2))
 
 
+@pytest.mark.parametrize(("points", "midpoint"), [([(4, 16), (16, 0), (28, 16)], (16, 8)), ([(4, 16), (4, 0), (28, 0), (28, 16)], (16, 4))])
+@pytest.mark.parametrize("antialias", [False, True])
+def test_bezier_strokes(points, midpoint, antialias):
+    image = Image.new("L", (33, 25))
+    ImageDraw.Draw(image, antialias=antialias).bezier(points, fill=255, width=3)
+
+    for point in (points[0], midpoint, points[-1]):
+        assert image.getpixel(point) == 255
+    assert image.getpixel((16, 16)) == 0
+    assert any(0 < pixel < 255 for pixel in image.tobytes()) == antialias
+
+
+def test_bezier_fractional_coordinates_clip_and_blend_once():
+    image = Image.new("RGB", (10, 8))
+    draw = ImageDraw.Draw(image, "RGBA")
+    draw.bezier((-4.0, 3.75, 24.0, 3.75, -4.0, 3.75), fill=(255, 0, 0, 128))
+
+    assert [image.getpixel((x, 4)) for x in range(10)] == [(128, 0, 0)] * 10
+    assert image.getpixel((0, 3)) == (0, 0, 0)
+
+
+@pytest.mark.parametrize("points", [[], [(2, 3)] * 5, [(0, 0), (float("nan"), 0), (3, 3)]])
+def test_bezier_rejects_invalid_geometry(points):
+    image = Image.new("L", (8, 8))
+    with pytest.raises(ValueError):
+        ImageDraw.Draw(image).bezier(points)
+    assert image.getbbox() is None
+
+
 @pytest.mark.parametrize("bounds", [((1, 1, 6, 6), (8, 8, 13, 13)), ((1, 1, 13, 13), (4, 4, 10, 10))])
 def test_shape_keeps_separate_outline_subpaths(bounds):
     actual, expected = new_pair("L", (16, 16), 0)

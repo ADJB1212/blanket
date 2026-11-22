@@ -20,6 +20,7 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(draw_points, module)?)?;
     module.add_function(wrap_pyfunction!(draw_rectangle, module)?)?;
     module.add_function(wrap_pyfunction!(draw_path, module)?)?;
+    module.add_function(wrap_pyfunction!(draw_bezier, module)?)?;
     module.add_function(wrap_pyfunction!(draw_ellipse, module)?)?;
     module.add_function(wrap_pyfunction!(draw_mask, module)?)?;
     module.add_function(wrap_pyfunction!(draw_image_mask, module)?)?;
@@ -398,13 +399,20 @@ pub(crate) fn draw_ellipse(
 }
 
 #[pyfunction]
+fn draw_bezier(image: &mut Image, xy: &Bound<'_, PyAny>, value: &Bound<'_, PyAny>, width: f64, blend: bool, antialias: bool) -> PyResult<()> {
+    let points = crate::path::parse_points(xy)?;
+    let vertices = value.py().detach(|| crate::geometry::flatten_bezier(&points))?;
+    draw_path(image, vertices, value, width, "stroke", blend, antialias)
+}
+
+#[pyfunction]
 fn draw_path(
     image: &mut Image, points: Vec<(f64, f64)>, value: &Bound<'_, PyAny>, width: f64, style: &str, blend: bool, antialias: bool,
 ) -> PyResult<()> {
     let (closed, filled) = match style {
         "fill" => (true, true),
         "outline" => (true, false),
-        "line" => (false, false),
+        "line" | "stroke" => (false, false),
         _ => return Err(PyValueError::new_err("invalid path style")),
     };
     let ink = ink(image, value, blend)?;
@@ -419,7 +427,7 @@ fn draw_path(
         return Ok(());
     }
     value.py().detach(|| {
-        if !filled && !closed && !antialias && width == 1.0 && points.iter().all(|&(x, y)| x.fract() == 0.0 && y.fract() == 0.0) {
+        if style == "line" && !antialias && width == 1.0 && points.iter().all(|&(x, y)| x.fract() == 0.0 && y.fract() == 0.0) {
             for pair in points.windows(2) {
                 thin_line(image, pair[0], pair[1], &ink, blend);
             }

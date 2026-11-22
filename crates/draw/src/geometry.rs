@@ -37,6 +37,51 @@ fn int_point(point: Point) -> PyResult<IntPoint> {
 
 const BEZIER_STEPS: usize = 32;
 
+pub(crate) fn flatten_bezier(points: &[Point]) -> PyResult<Vec<Point>> {
+    if !matches!(points.len(), 3 | 4) {
+        return Err(PyValueError::new_err("a Bezier curve requires three or four points"));
+    }
+    for &point in points {
+        int_point(point)?;
+    }
+    let mut vertices = vec![points[0]];
+    match *points {
+        [a, b, c] => subdivide_bezier([a, b, c], &mut vertices, 0),
+        [a, b, c, d] => subdivide_bezier([a, b, c, d], &mut vertices, 0),
+        _ => unreachable!(),
+    }
+    Ok(vertices)
+}
+
+fn subdivide_bezier<const N: usize>(mut points: [Point; N], vertices: &mut Vec<Point>, depth: u8) {
+    const MAX_DEPTH: u8 = 16;
+    const TOLERANCE: f64 = 0.0625;
+    let start = points[0];
+    let end = points[N - 1];
+    // The control-point deviations bound the curve's deviation from its chord.
+    let flat = (1..N - 1).all(|i| {
+        let t = i as f64 / (N - 1) as f64;
+        let dx = (points[i].0 - start.0) - t * (end.0 - start.0);
+        let dy = (points[i].1 - start.1) - t * (end.1 - start.1);
+        dx * dx + dy * dy <= TOLERANCE * TOLERANCE
+    });
+    if flat || depth == MAX_DEPTH {
+        vertices.push(end);
+        return;
+    }
+    let mut left = [start; N];
+    let mut right = [end; N];
+    for level in 1..N {
+        for i in 0..N - level {
+            points[i] = (points[i].0.midpoint(points[i + 1].0), points[i].1.midpoint(points[i + 1].1));
+        }
+        left[level] = points[0];
+        right[N - 1 - level] = points[N - 1 - level];
+    }
+    subdivide_bezier(left, vertices, depth + 1);
+    subdivide_bezier(right, vertices, depth + 1);
+}
+
 fn bezier_edges(start: Point, controls: [Point; 3]) -> PyResult<([Edge; BEZIER_STEPS], Point)> {
     let [(x1, y1), (x2, y2), (x3, y3)] = controls;
     let mut previous = int_point(start)?;

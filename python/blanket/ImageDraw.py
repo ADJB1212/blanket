@@ -18,6 +18,7 @@ from . import Image
 from ._blanket import (
     Outline,
     draw_arc_points,
+    draw_bezier,
     draw_curve,
     draw_ellipse,
     draw_floodfill,
@@ -435,6 +436,18 @@ class ImageDraw:
             self.im._native.load()
             return
         self._path(points, fill, width=max(1, width))
+
+    def bezier(self, xy: Coords, fill: Color = None, width: int = 1) -> None:
+        """Stroke a quadratic or cubic Bézier curve with round caps.
+
+        Args:
+            xy: Start point, one or two control points, and end point.
+                Accepts coordinate pairs or flat coordinates and preserves
+                fractional positions.
+            fill: Stroke ink. `None` uses the context's default ink.
+            width: Stroke thickness in pixels, with a minimum of one.
+        """
+        draw_bezier(self.im._native, xy, self._ink(fill), max(1, index(width)), bool(self.blend), bool(self.antialias))
 
     def pieslice(self, xy: Coords, start: float, end: float, fill: Color = None, outline: Color = None, width: int = 1) -> None:
         """Draw an elliptical sector bounded by an arc and two radii.

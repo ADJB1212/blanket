@@ -418,8 +418,10 @@ with new processing semantics exposed explicitly.
 
 #### Drawing and Compositing Extensions
 
-- [ ] **Bezier paths** — quadratic and cubic curves with configurable stroke
-      joins, caps, dash patterns, and fill rules
+- [x] **Bezier curves** — stroke quadratic and cubic curves with
+      `ImageDraw.bezier`, including optional antialiasing
+- [ ] **Bezier paths** — connect curves with configurable stroke joins, caps,
+      dash patterns, and fill rules
 - [ ] **Gradient and pattern fills** — linear and radial gradients, repeated
       image patterns, and reusable clipping masks for drawing operations
 - [x] **Vector export** — serialize path geometry, text runs, and basic shapes

@@ -41,39 +41,43 @@ impl Path {
     }
 }
 
-#[pymethods]
-impl Path {
-    #[new]
-    fn new(xy: &Bound<'_, PyAny>) -> PyResult<Self> {
-        let mut points = Vec::with_capacity(xy.len().unwrap_or(0));
-        let mut pending = None;
-        for value in xy.try_iter()? {
-            let value = value?;
-            if value.is_instance_of::<PyTuple>() || value.is_instance_of::<PyList>() {
-                if value.len()? != 2 {
-                    return Err(PyValueError::new_err("coordinate list must contain exactly 2 coordinates"));
-                }
-                for item in [value.get_item(0)?, value.get_item(1)?] {
-                    let number = coordinate(&item)?;
-                    if let Some(x) = pending.take() {
-                        points.push((x, number));
-                    } else {
-                        pending = Some(number);
-                    }
-                }
-            } else {
-                let number = coordinate(&value)?;
+pub(crate) fn parse_points(xy: &Bound<'_, PyAny>) -> PyResult<Vec<(f64, f64)>> {
+    let mut points = Vec::with_capacity(xy.len().unwrap_or(0));
+    let mut pending = None;
+    for value in xy.try_iter()? {
+        let value = value?;
+        if value.is_instance_of::<PyTuple>() || value.is_instance_of::<PyList>() {
+            if value.len()? != 2 {
+                return Err(PyValueError::new_err("coordinate list must contain exactly 2 coordinates"));
+            }
+            for item in [value.get_item(0)?, value.get_item(1)?] {
+                let number = coordinate(&item)?;
                 if let Some(x) = pending.take() {
                     points.push((x, number));
                 } else {
                     pending = Some(number);
                 }
             }
+        } else {
+            let number = coordinate(&value)?;
+            if let Some(x) = pending.take() {
+                points.push((x, number));
+            } else {
+                pending = Some(number);
+            }
         }
-        if pending.is_some() {
-            return Err(PyValueError::new_err("wrong number of coordinates"));
-        }
-        Ok(Self { points, objects: None })
+    }
+    if pending.is_some() {
+        return Err(PyValueError::new_err("wrong number of coordinates"));
+    }
+    Ok(points)
+}
+
+#[pymethods]
+impl Path {
+    #[new]
+    fn new(xy: &Bound<'_, PyAny>) -> PyResult<Self> {
+        Ok(Self { points: parse_points(xy)?, objects: None })
     }
 
     #[staticmethod]
