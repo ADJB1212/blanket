@@ -54,6 +54,13 @@ pub fn output(image: &Image, size: (u32, u32), pixels: Vec<u8>) -> PyResult<Imag
     Ok(result)
 }
 
+/// Copy rows from zero-based indices into an empty, preallocated pixel buffer.
+///
+/// # Panics
+///
+/// Panics if the destination is nonempty or lacks capacity for all rows, if a
+/// source row has a different length than `row_bytes`, or if the size
+/// calculations overflow.
 pub fn copy_rows<'a>(pixels: &mut Vec<u8>, row_bytes: usize, height: usize, source_row: impl Fn(usize) -> &'a [u8] + Sync) {
     assert!(pixels.is_empty());
     let len = row_bytes.checked_mul(height).expect("validated image dimensions");
