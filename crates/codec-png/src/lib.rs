@@ -104,7 +104,7 @@ pub fn encode_png(image: &Image, pixels: &[u8], compress_level: u8) -> PyResult<
     }
     let mut output = Vec::new();
     PngEncoder::new_with_quality(&mut output, CompressionType::Level(compress_level), FilterType::Adaptive)
-        .write_image(pixels, image.width(), image.height(), color_type(image.pixel_mode()))
+        .write_image(pixels, image.width(), image.height(), color_type(image.pixel_mode()).map_err(codec_error)?)
         .map_err(codec_error)?;
     Ok(output)
 }
@@ -115,7 +115,7 @@ pub fn encode_png_to(image: &Image, pixels: &[u8], compress_level: u8, output: i
         return encode::encode_to(image, pixels, compress_level, output);
     }
     PngEncoder::new_with_quality(output, CompressionType::Level(compress_level), FilterType::Adaptive)
-        .write_image(pixels, image.width(), image.height(), color_type(image.pixel_mode()))
+        .write_image(pixels, image.width(), image.height(), color_type(image.pixel_mode()).map_err(codec_error)?)
         .map_err(codec_error)
 }
 

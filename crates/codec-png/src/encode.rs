@@ -242,7 +242,7 @@ mod tests {
                 let actual = encode(&image, pixels, 1).unwrap();
                 let mut reference = Vec::new();
                 PngEncoder::new_with_quality(&mut reference, CompressionType::Level(1), FilterType::Adaptive)
-                    .write_image(pixels, size.0, size.1, blanket_codec_image::color_type(mode))
+                    .write_image(pixels, size.0, size.1, blanket_codec_image::color_type(mode).unwrap())
                     .unwrap();
                 assert!(actual.len() <= reference.len() + 64, "{mode:?}/{size:?}: {} > {}", actual.len(), reference.len());
                 assert_eq!(crate::decode_png(&actual).unwrap().pixel_data().unwrap(), pixels);

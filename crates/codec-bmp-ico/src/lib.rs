@@ -185,7 +185,7 @@ pub fn encode_bmp(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
     }
     let mut output = Vec::new();
     image::codecs::bmp::BmpEncoder::new(&mut output)
-        .write_image(pixels, image.width(), image.height(), color_type(image.pixel_mode()))
+        .write_image(pixels, image.width(), image.height(), color_type(image.pixel_mode()).map_err(codec_error)?)
         .map_err(codec_error)?;
     Ok(output)
 }
@@ -242,7 +242,7 @@ pub fn encode_ico(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
     }
     let mut output = Vec::new();
     image::codecs::ico::IcoEncoder::new(&mut output)
-        .write_image(pixels, image.width(), image.height(), color_type(image.pixel_mode()))
+        .write_image(pixels, image.width(), image.height(), color_type(image.pixel_mode()).map_err(codec_error)?)
         .map_err(codec_error)?;
     Ok(output)
 }
@@ -271,7 +271,9 @@ mod tests {
 
     fn generic_encode(image: &Image, pixels: &[u8]) -> Vec<u8> {
         let mut output = Vec::new();
-        image::codecs::bmp::BmpEncoder::new(&mut output).write_image(pixels, image.width(), image.height(), color_type(image.pixel_mode())).unwrap();
+        image::codecs::bmp::BmpEncoder::new(&mut output)
+            .write_image(pixels, image.width(), image.height(), color_type(image.pixel_mode()).unwrap())
+            .unwrap();
         output
     }
 

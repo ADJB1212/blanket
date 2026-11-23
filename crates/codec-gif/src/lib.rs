@@ -295,7 +295,7 @@ pub fn encode_gif(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
         gif::Encoder::new(&mut output, frame.width, frame.height, &palette).map_err(codec_error)?.write_frame(&frame).map_err(codec_error)?;
     } else {
         image::codecs::gif::GifEncoder::new(&mut output)
-            .encode(pixels, image.width(), image.height(), color_type(image.pixel_mode()))
+            .encode(pixels, image.width(), image.height(), color_type(image.pixel_mode()).map_err(codec_error)?)
             .map_err(codec_error)?;
     }
 

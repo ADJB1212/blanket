@@ -683,7 +683,7 @@ pub fn encode_tiff(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
     }
     let mut output = Cursor::new(Vec::with_capacity(pixels.len().saturating_add(1024)));
     image::codecs::tiff::TiffEncoder::new(&mut output)
-        .write_image(pixels, image.width(), image.height(), color_type(image.pixel_mode()))
+        .write_image(pixels, image.width(), image.height(), color_type(image.pixel_mode()).map_err(codec_error)?)
         .map_err(codec_error)?;
     Ok(output.into_inner())
 }

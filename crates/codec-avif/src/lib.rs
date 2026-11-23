@@ -124,7 +124,7 @@ pub fn encode_avif(image: &Image, pixels: &[u8], options: SaveOptions) -> PyResu
         rgb = blanket_convert_kernels::simd::convert(pixels, PixelMode::L, PixelMode::Rgb);
         (rgb.as_slice(), ExtendedColorType::Rgb8)
     } else {
-        (pixels, color_type(image.pixel_mode()))
+        (pixels, color_type(image.pixel_mode()).map_err(codec_error)?)
     };
     let mut output = Vec::new();
     with_rayon_worker_limit(|| {

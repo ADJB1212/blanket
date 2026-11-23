@@ -38,16 +38,18 @@ pub fn inspect_rust_image(data: &[u8], format: RustFormat) -> Result<blanket_cod
     blanket_codec_common::ImageHeader::new(width, height, mode, depth)
 }
 
-#[must_use]
-pub fn color_type(mode: PixelMode) -> ExtendedColorType {
-    match mode {
+pub fn color_type(mode: PixelMode) -> Result<ExtendedColorType, image::ImageError> {
+    Ok(match mode {
         PixelMode::One | PixelMode::L => ExtendedColorType::L8,
         PixelMode::La => ExtendedColorType::La8,
         PixelMode::Rgb => ExtendedColorType::Rgb8,
         PixelMode::Rgba => ExtendedColorType::Rgba8,
-        PixelMode::Pa => unreachable!("PA must be expanded before encoding"),
-        _ => unreachable!("integer modes must be converted before encoding"),
-    }
+        _ => {
+            use image::error::{ImageFormatHint, UnsupportedError, UnsupportedErrorKind};
+            let kind = UnsupportedErrorKind::GenericFeature(format!("cannot write mode {}", mode.as_str()));
+            return Err(image::ImageError::Unsupported(UnsupportedError::from_format_and_kind(ImageFormatHint::Unknown, kind)));
+        }
+    })
 }
 
 pub fn decode_rust_image(data: &[u8], format: RustFormat, format_name: &str) -> Result<Image, DecodeError> {
@@ -121,6 +123,16 @@ pub fn decode_with_metadata(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn encoding_color_type_rejects_unsupported_modes() {
+        for mode in [PixelMode::Hsv, PixelMode::Pa, PixelMode::I16] {
+            let error = color_type(mode).unwrap_err();
+            assert!(matches!(error, image::ImageError::Unsupported(_)));
+            assert!(error.to_string().contains(mode.as_str()));
+        }
+        assert_eq!(color_type(PixelMode::Rgba).unwrap(), ExtendedColorType::Rgba8);
+    }
 
     #[test]
     fn shifted_samples_match_scalar_across_blocks_and_tails() {

@@ -170,7 +170,7 @@ pub fn encode_extended(image: &Image, pixels: &[u8], format: &str) -> PyResult<V
         return Err(PyOSError::new_err("cannot encode an empty image"));
     }
     let mut output = Vec::new();
-    let color = color_type(image.pixel_mode());
+    let color = color_type(image.pixel_mode()).map_err(codec_error)?;
     match format {
         "TGA" => return encode_tga(image, pixels),
         "QOI" => image::codecs::qoi::QoiEncoder::new(&mut output).write_image(pixels, image.width(), image.height(), color).map_err(codec_error)?,
