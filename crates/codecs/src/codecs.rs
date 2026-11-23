@@ -532,7 +532,7 @@ pub fn decode(data: &[u8], format: ImageFormat) -> Result<Image, DecodeError> {
         ImageFormat::Dds => decode_dds(data),
         ImageFormat::Eps => decode_eps(data),
         ImageFormat::Qoi => decode_qoi(data),
-        ImageFormat::Jpeg2000 => decode_jpeg2000(data).map_err(DecodeError::from),
+        ImageFormat::Jpeg2000 => decode_jpeg2000(data),
         ImageFormat::Bmp => decode_bmp(data),
         ImageFormat::Gif => decode_gif(data).map_err(DecodeError::from),
         ImageFormat::Ico => decode_ico(data),

@@ -3,7 +3,7 @@
 use std::ffi::{CStr, c_void};
 use std::ptr;
 
-use blanket_codec_common::{codec_error, validate_dimensions};
+use blanket_codec_common::{CodecErrorKind, DecodeError, codec_error, validate_dimensions};
 use blanket_core::parallel::deterministic;
 use blanket_core::{Image, PixelMode};
 use openjpeg_sys::*;
@@ -192,10 +192,10 @@ pub fn inspect(data: &[u8]) -> Result<blanket_codec_common::ImageHeader, String>
     }
 }
 
-pub fn decode_jpeg2000(data: &[u8]) -> Result<Image, String> {
+pub fn decode_jpeg2000(data: &[u8]) -> Result<Image, DecodeError> {
     let format = if data.starts_with(&[0xff, 0x4f]) { CODEC_FORMAT::OPJ_CODEC_J2K } else { CODEC_FORMAT::OPJ_CODEC_JP2 };
     let mut buffer = Buffer { input: data, .. };
-    let mut handles = Handles::new(format, &mut buffer)?;
+    let mut handles = Handles::new(format, &mut buffer).map_err(|message| DecodeError::from(message).with_kind(CodecErrorKind::ResourceLimit))?;
     // SAFETY: OpenJPEG initializes parameters and owns all image/component allocations.
     // Header dimensions and component layouts are validated before reading sample buffers.
     unsafe {
@@ -213,15 +213,18 @@ pub fn decode_jpeg2000(data: &[u8]) -> Result<Image, String> {
         let header = &*handles.image;
         let width = header.x1.checked_sub(header.x0).ok_or("invalid JPEG 2000 width")?;
         let height = header.y1.checked_sub(header.y0).ok_or("invalid JPEG 2000 height")?;
-        validate_dimensions(width, height)?;
-        if width == 0 || height == 0 || !(1..=4).contains(&header.numcomps) || header.comps.is_null() {
-            return Err("unsupported JPEG 2000 component layout".into());
+        validate_dimensions(width, height).map_err(|message| DecodeError::from(message).with_kind(CodecErrorKind::ResourceLimit))?;
+        if width == 0 || height == 0 || header.comps.is_null() {
+            return Err("invalid JPEG 2000 component layout".into());
+        }
+        if !(1..=4).contains(&header.numcomps) {
+            return Err(DecodeError::from("unsupported JPEG 2000 component layout").with_kind(CodecErrorKind::Unsupported));
         }
         if !matches!(
             header.color_space,
             COLOR_SPACE::OPJ_CLRSPC_UNKNOWN | COLOR_SPACE::OPJ_CLRSPC_UNSPECIFIED | COLOR_SPACE::OPJ_CLRSPC_SRGB | COLOR_SPACE::OPJ_CLRSPC_GRAY
         ) {
-            return Err("JPEG 2000 requires grayscale or RGB color space".into());
+            return Err(DecodeError::from("JPEG 2000 requires grayscale or RGB color space").with_kind(CodecErrorKind::Unsupported));
         }
         let channels = header.numcomps as usize;
         let components = std::slice::from_raw_parts(header.comps, channels);
@@ -229,14 +232,17 @@ pub fn decode_jpeg2000(data: &[u8]) -> Result<Image, String> {
         if !(1..=16).contains(&depth)
             || components.iter().any(|c| c.prec != depth || c.sgnd != 0 || c.w != width || c.h != height || c.dx != 1 || c.dy != 1)
         {
-            return Err("unsupported JPEG 2000 sample precision or subsampling".into());
+            return Err(DecodeError::from("unsupported JPEG 2000 sample precision or subsampling").with_kind(CodecErrorKind::Unsupported));
         }
         if opj_decode(handles.codec, handles.stream, handles.image) == 0 || opj_end_decompress(handles.codec, handles.stream) == 0 {
             return Err("could not decode JPEG 2000 pixels".into());
         }
         let header = &*handles.image;
-        if header.numcomps as usize != channels || header.comps.is_null() {
-            return Err("unsupported JPEG 2000 channel mapping".into());
+        if header.comps.is_null() {
+            return Err("missing JPEG 2000 component data".into());
+        }
+        if header.numcomps as usize != channels {
+            return Err(DecodeError::from("unsupported JPEG 2000 channel mapping").with_kind(CodecErrorKind::Unsupported));
         }
         let components = std::slice::from_raw_parts(header.comps, channels);
         if components.iter().any(|c| c.data.is_null() || c.w != width || c.h != height) {
@@ -269,16 +275,18 @@ pub fn decode_jpeg2000(data: &[u8]) -> Result<Image, String> {
                 convert!(false);
             }
         };
-        if depth <= 8 {
-            let mut pixels = vec![0; count * channels];
-            pack(false, &mut pixels);
-            Image::from_pixels(width, height, mode, pixels, Some("JPEG2000".into())).map_err(|e| e.to_string())
+        let wide = depth > 8;
+        let output_mode = if wide && channels == 2 { PixelMode::Rgba } else { mode };
+        let length = count * output_mode.channels() * if wide { 2 } else { 1 };
+        let mut pixels =
+            blanket_core::raster::alloc_pixels(length).map_err(|error| DecodeError::with_source(error).with_kind(CodecErrorKind::ResourceLimit))?;
+        pack(wide, &mut pixels);
+        if wide {
+            Image::from_sample_bytes(width, height, output_mode, pixels, 16, Some("JPEG2000".into()))
         } else {
-            let mut samples = vec![0; count * if channels == 2 { 4 } else { channels } * 2];
-            pack(true, &mut samples);
-            Image::from_sample_bytes(width, height, if channels == 2 { PixelMode::Rgba } else { mode }, samples, 16, Some("JPEG2000".into()))
-                .map_err(|e| e.to_string())
+            Image::from_pixels(width, height, output_mode, pixels, Some("JPEG2000".into()))
         }
+        .map_err(DecodeError::with_source)
     }
 }
 
@@ -362,6 +370,18 @@ pub fn encode_jpeg2000(image: &Image) -> PyResult<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn jp2_color_space_errors_are_unsupported() {
+        let image = Image::from_pixels(2, 2, PixelMode::Rgb, vec![0; 12], None).unwrap();
+        let mut data = encode_jpeg2000(&image).unwrap();
+        let rgb_color = b"colr\x01\0\0\0\0\0\x10";
+        let offset = data.windows(rgb_color.len()).position(|bytes| bytes == rgb_color).unwrap();
+        data[offset + rgb_color.len() - 1] = 18; // Enumerated sYCC color space.
+        let error = decode_jpeg2000(&data).unwrap_err();
+        assert_eq!(error.kind(), CodecErrorKind::Unsupported);
+        assert_eq!(error.to_string(), "JPEG 2000 requires grayscale or RGB color space");
+    }
 
     #[test]
     fn input_callbacks_bound_reads_and_preserve_failed_seek_position() {
