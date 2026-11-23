@@ -33,12 +33,12 @@ impl PixelAccess {
 
     fn __getitem__(&self, py: Python<'_>, xy: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
         let xy = coordinates(xy)?;
-        self.image()?.borrow(py).getpixel(py, xy)
+        self.image()?.try_borrow(py)?.getpixel(py, xy)
     }
 
     fn __setitem__(&self, py: Python<'_>, xy: &Bound<'_, PyAny>, value: &Bound<'_, PyAny>) -> PyResult<()> {
         let xy = coordinates(xy)?;
-        let mut image = self.image()?.borrow_mut(py);
+        let mut image = self.image()?.try_borrow_mut(py)?;
         if let Ok(single) = value.cast::<PyTuple>()
             && single.len() == 1
         {
@@ -50,5 +50,29 @@ impl PixelAccess {
             }
         }
         image.putpixel(xy, value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::PixelMode;
+
+    #[test]
+    fn pixel_access_reports_borrow_conflicts() {
+        Python::initialize();
+        Python::attach(|py| {
+            let image = Py::new(py, Image::from_pixels(1, 1, PixelMode::L, vec![0], None).unwrap()).unwrap();
+            let access = PixelAccess { image: Some(image.clone_ref(py)) };
+            let xy = (0_i64, 0_i64).into_pyobject(py).unwrap();
+            let value = 1_i64.into_pyobject(py).unwrap();
+
+            let writer = image.borrow_mut(py);
+            assert!(access.__getitem__(py, xy.as_any()).unwrap_err().is_instance_of::<pyo3::exceptions::PyRuntimeError>(py));
+            drop(writer);
+
+            let _reader = image.borrow(py);
+            assert!(access.__setitem__(py, xy.as_any(), value.as_any()).unwrap_err().is_instance_of::<pyo3::exceptions::PyRuntimeError>(py));
+        });
     }
 }
