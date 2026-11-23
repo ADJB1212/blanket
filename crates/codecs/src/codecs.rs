@@ -302,6 +302,7 @@ pub fn _inspect(py: Python<'_>, data: &[u8], formats: Option<Vec<String>>) -> Py
 }
 
 type OpenSequence = (Vec<Image>, Vec<(Option<f64>, u8, u8)>, Option<u32>, bool);
+type SequenceIndex = (usize, Option<u32>, bool, Option<Vec<u64>>);
 type AnimationRegions = ((u32, u32), Vec<(u32, u32)>);
 
 fn check_tiff_size(callback: Option<&Py<PyAny>>, size: (u32, u32)) -> Result<(), DecodeError> {
@@ -312,25 +313,29 @@ fn check_tiff_size(callback: Option<&Py<PyAny>>, size: (u32, u32)) -> Result<(),
 }
 
 #[pyfunction(signature = (data, formats, tiff_size_check=None))]
-pub fn _index_sequence(
-    py: Python<'_>, data: &[u8], formats: Option<Vec<String>>, tiff_size_check: Option<Py<PyAny>>,
-) -> PyResult<(usize, Option<u32>, bool)> {
+pub fn _index_sequence(py: Python<'_>, data: &[u8], formats: Option<Vec<String>>, tiff_size_check: Option<Py<PyAny>>) -> PyResult<SequenceIndex> {
     let format = input_format(data, formats)?;
+    if format == ImageFormat::Tiff {
+        let offsets = py
+            .detach(|| blanket_codec_tiff::index_pages(data, |size| check_tiff_size(tiff_size_check.as_ref(), size)))
+            .map_err(|error| error.into_pyerr(Some("TIFF")))?;
+        return Ok((offsets.len(), None, false, Some(offsets)));
+    }
     let sequence = py
         .detach(|| match format {
             ImageFormat::Gif => blanket_codec_gif::index_sequence(data).map_err(DecodeError::from),
             ImageFormat::Webp => blanket_codec_webp::index_sequence(data).map_err(DecodeError::from),
             ImageFormat::Png => blanket_codec_png::index_sequence(data).map_err(DecodeError::from),
-            ImageFormat::Tiff => blanket_codec_tiff::index_sequence_with_size_check(data, |size| check_tiff_size(tiff_size_check.as_ref(), size)),
             _ => Err("lazy frame access is not supported for this format".into()),
         })
         .map_err(|error| error.into_pyerr(Some(format.as_str())))?;
-    Ok((sequence.count, sequence.loop_count, sequence.default_image))
+    Ok((sequence.count, sequence.loop_count, sequence.default_image, None))
 }
 
-#[pyfunction(signature = (data, formats, frame, progress=None, tiff_size_check=None))]
+#[pyfunction(signature = (data, formats, frame, progress=None, tiff_size_check=None, *, tiff_offset=None))]
 pub fn _open_sequence(
     py: Python<'_>, data: &[u8], formats: Option<Vec<String>>, frame: Option<usize>, progress: Option<Py<PyAny>>, tiff_size_check: Option<Py<PyAny>>,
+    tiff_offset: Option<u64>,
 ) -> PyResult<OpenSequence> {
     use blanket_codec_common::Sequence;
     let format = input_format(data, formats)?;
@@ -342,9 +347,12 @@ pub fn _open_sequence(
             ImageFormat::Gif => blanket_codec_gif::decode_frames(data, frame, &progress),
             ImageFormat::Webp => blanket_codec_webp::decode_frames(data, frame, &progress),
             ImageFormat::Png => blanket_codec_png::decode_frames(data, frame, &progress),
-            ImageFormat::Tiff => {
-                blanket_codec_tiff::decode_frames_with_size_check(data, frame, &progress, |size| check_tiff_size(tiff_size_check.as_ref(), size))
-            }
+            ImageFormat::Tiff => match tiff_offset {
+                Some(offset) => blanket_codec_tiff::decode_indexed_page(data, offset, &progress).map(Sequence::single),
+                None => {
+                    blanket_codec_tiff::decode_frames_with_size_check(data, frame, &progress, |size| check_tiff_size(tiff_size_check.as_ref(), size))
+                }
+            },
             _ => decode(data, format).map(Sequence::single),
         })
         .map_err(|error| error.into_pyerr(Some(format.as_str())))?;

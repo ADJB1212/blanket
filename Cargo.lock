@@ -420,7 +420,6 @@ dependencies = [
  "image",
  "pyo3",
  "rayon",
- "rustc-hash",
  "tiff",
  "weezl 0.2.1",
  "zerocopy",

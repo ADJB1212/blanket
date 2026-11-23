@@ -20,7 +20,6 @@ image = { version = "0.25", default-features = false, features = ["tiff"] }
 tiff = { version = "0.11", default-features = false, features = ["deflate", "lzw", "jpeg"]}
 flate2.workspace = true
 rayon.workspace = true
-rustc-hash.workspace = true
 weezl = { version = "0.2", default-features = false, features = ["std"] }
 zerocopy.workspace = true
 

@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 class LazyFrames:
     """Bounded cache and on-demand decoder for sequence frames."""
 
-    def __init__(self, data: bytes, count: int, capacity: int, loop: int | None, default_image: bool) -> None:
+    def __init__(self, data: bytes, count: int, capacity: int, loop: int | None, default_image: bool, tiff_offsets: list[int] | None) -> None:
         """Store encoded sequence bytes, frame count, cache capacity, and animation controls."""
         self.data = data
         self.count = count
@@ -30,6 +30,7 @@ class LazyFrames:
         self.loop = loop
         self.default_image = default_image
         self.cache: OrderedDict[int, Image] = OrderedDict()
+        self._tiff_offsets = tiff_offsets
         self._tiff_metadata: Iterator[dict[object, object]] | None = None
         self._tiff_frame = 0
         self._metadata: dict[object, object] | None = None
@@ -42,7 +43,10 @@ class LazyFrames:
             if retain:
                 self.cache.move_to_end(frame)
             return self.cache[frame]
-        frames, controls, _, _ = _open_sequence(self.data, None, frame if self.count > 1 else None, progress)
+        if self._tiff_offsets is None:
+            frames, controls, _, _ = _open_sequence(self.data, None, frame if self.count > 1 else None, progress)
+        else:
+            frames, controls, _, _ = _open_sequence(self.data, None, frame, progress, tiff_offset=self._tiff_offsets[frame])
         selected = Image(frames[0])
         if selected.format == "TIFF":
             if self._tiff_metadata is None or frame < self._tiff_frame:
@@ -80,6 +84,7 @@ class LazyFrames:
         for frame in self.cache.values():
             frame.close()
         self.cache.clear()
+        self._tiff_offsets = None
         self._tiff_metadata = None
         self._metadata = None
         self.data = b""

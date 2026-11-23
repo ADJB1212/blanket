@@ -67,6 +67,11 @@ pub fn decode_with_metadata(
     data: &[u8], format: RustFormat, format_name: &str, significant_bits: Option<&[u8]>, luma: LumaMode,
 ) -> Result<Image, DecodeError> {
     let decoder = image::ImageReader::with_format(Cursor::new(data), format).into_decoder().map_err(DecodeError::with_diagnostic_source)?;
+    decode_pixels(decoder, format_name, significant_bits, luma)
+}
+
+/// Convert pixels from a configured decoder to Blanket storage.
+pub fn decode_pixels(decoder: impl ImageDecoder, format_name: &str, significant_bits: Option<&[u8]>, luma: LumaMode) -> Result<Image, DecodeError> {
     let dimensions = decoder.dimensions();
     validate_dimensions(dimensions.0, dimensions.1)?;
     let color = decoder.color_type();

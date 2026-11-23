@@ -1,8 +1,10 @@
 use std::borrow::Cow;
-use std::io::Cursor;
+use std::io::{self, BufReader, Cursor, Read, Seek, SeekFrom};
 
-use blanket_codec_common::{CodecErrorKind, DecodeError, SaveOptions, codec_error, decode_checkpoint, u16_bytes, validate_dimensions};
-use blanket_codec_image::{color_type, decode_rust_image};
+use blanket_codec_common::{
+    CodecErrorKind, DecodeError, SaveOptions, codec_error, decode_checkpoint, u16_bytes, validate_dimensions, validate_frame_budget,
+};
+use blanket_codec_image::{LumaMode, color_type, decode_pixels};
 use blanket_core::progress::Progress;
 use blanket_core::{Image, PixelMode};
 use image::{ExtendedColorType, ImageEncoder, ImageFormat as RustFormat};
@@ -135,7 +137,9 @@ pub fn inspect(data: &[u8]) -> Result<blanket_codec_common::ImageHeader, String>
     blanket_codec_common::ImageHeader::new(width, height, mode, depth.try_into().map_err(|_| "invalid TIFF depth")?)
 }
 
-fn decode_special_tiff(data: &[u8], decoder: &mut tiff::decoder::Decoder<Cursor<&[u8]>>, progress: &Progress) -> Result<Option<Image>, DecodeError> {
+fn decode_special_tiff(
+    data: &[u8], decoder: &mut tiff::decoder::Decoder<impl Read + Seek>, progress: &Progress,
+) -> Result<Option<Image>, DecodeError> {
     let photometric = decoder.get_tag_u32(tiff::tags::Tag::PhotometricInterpretation).ok();
     if decoder.get_tag_u32(tiff::tags::Tag::Compression).ok() == Some(7) {
         return decode_jpeg_tiff(data, decoder, progress).map(Some);
@@ -143,8 +147,10 @@ fn decode_special_tiff(data: &[u8], decoder: &mut tiff::decoder::Decoder<Cursor<
     if matches!(photometric, Some(8 | 9)) {
         let signed = photometric == Some(8);
         // Decode LAB as raw three-channel samples; the TIFF crate cannot read LAB buffers.
-        let normalized = lab_tiff_as_rgb(data)?;
-        let mut decoder = tiff::decoder::Decoder::new(Cursor::new(normalized.as_slice())).map_err(|error| error.to_string())?;
+        let directory = current_directory(decoder)?;
+        let mut reader = PageReader::new(data, directory)?;
+        reader.photometric = Some(lab_photometric_patch(data, directory)?);
+        let mut decoder = tiff::decoder::Decoder::new(reader).map_err(DecodeError::with_diagnostic_source)?;
         if decoder.colortype().map_err(|error| error.to_string())? != tiff::ColorType::RGB(8) {
             return Err("only 8-bit LAB TIFF images are supported".into());
         }
@@ -190,7 +196,7 @@ fn decode_special_tiff(data: &[u8], decoder: &mut tiff::decoder::Decoder<Cursor<
     Ok(Some(image))
 }
 
-fn decode_direct_tiff(decoder: &mut tiff::decoder::Decoder<Cursor<&[u8]>>, progress: &Progress) -> Result<Option<Image>, DecodeError> {
+fn decode_direct_tiff(decoder: &mut tiff::decoder::Decoder<impl Read + Seek>, progress: &Progress) -> Result<Option<Image>, DecodeError> {
     use tiff::tags::SampleFormat;
 
     let (mode, depth) = match decoder.colortype().map_err(|error| error.to_string())? {
@@ -251,7 +257,7 @@ fn decode_direct_tiff(decoder: &mut tiff::decoder::Decoder<Cursor<&[u8]>>, progr
 }
 
 fn read_chunks(
-    decoder: &mut tiff::decoder::Decoder<Cursor<&[u8]>>, pixels: &mut [u8], (width, height): (u32, u32), stride: usize, progress: &Progress,
+    decoder: &mut tiff::decoder::Decoder<impl Read + Seek>, pixels: &mut [u8], (width, height): (u32, u32), stride: usize, progress: &Progress,
 ) -> Result<(), DecodeError> {
     let (cw, ch) = decoder.chunk_dimensions();
     if cw == 0 || ch == 0 {
@@ -284,7 +290,7 @@ fn read_chunks(
     Ok(())
 }
 
-fn decode_lzw_strips(data: &[u8], decoder: &mut tiff::decoder::Decoder<Cursor<&[u8]>>) -> Result<Option<Image>, String> {
+fn decode_lzw_strips(data: &[u8], decoder: &mut tiff::decoder::Decoder<impl Read + Seek>) -> Result<Option<Image>, String> {
     use tiff::tags::Tag;
 
     let mode = match decoder.colortype().map_err(|e| e.to_string())? {
@@ -322,7 +328,7 @@ fn decode_lzw_strips(data: &[u8], decoder: &mut tiff::decoder::Decoder<Cursor<&[
     Image::from_pixels(width, height, mode, pixels, Some("TIFF".into())).map(Some).map_err(|e| e.to_string())
 }
 
-fn decode_jpeg_tiff(data: &[u8], decoder: &mut tiff::decoder::Decoder<Cursor<&[u8]>>, progress: &Progress) -> Result<Image, DecodeError> {
+fn decode_jpeg_tiff(data: &[u8], decoder: &mut tiff::decoder::Decoder<impl Read + Seek>, progress: &Progress) -> Result<Image, DecodeError> {
     use tiff::tags::Tag;
 
     let (width, height) = decoder.dimensions().map_err(|e| e.to_string())?;
@@ -396,7 +402,69 @@ fn decode_jpeg_tiff(data: &[u8], decoder: &mut tiff::decoder::Decoder<Cursor<&[u
     Image::from_pixels(width, height, mode, pixels, Some("TIFF".into())).map_err(|e| e.to_string().into())
 }
 
-fn lab_tiff_as_rgb(data: &[u8]) -> Result<Vec<u8>, String> {
+fn current_directory(decoder: &mut tiff::decoder::Decoder<impl Read + Seek>) -> Result<u64, DecodeError> {
+    decoder.ifd_pointer().map(|pointer| pointer.0).ok_or_else(|| "missing TIFF directory".into())
+}
+
+fn is_big_tiff(data: &[u8]) -> bool {
+    matches!(data.get(2..4), Some(b"+\0" | b"\0+"))
+}
+
+// Present a selected page as the first IFD without copying the encoded file.
+struct PageReader<'a> {
+    source: Cursor<&'a [u8]>,
+    directory: [u8; 8],
+    directory_field: usize,
+    photometric: Option<(usize, [u8; 2])>,
+}
+
+impl<'a> PageReader<'a> {
+    fn new(data: &'a [u8], offset: u64) -> Result<Self, DecodeError> {
+        let mut directory = [0; 8];
+        let little = data.starts_with(b"II");
+        let directory_field = if is_big_tiff(data) {
+            directory = if little { offset.to_le_bytes() } else { offset.to_be_bytes() };
+            8
+        } else {
+            let offset = u32::try_from(offset).map_err(|_| "invalid classic TIFF directory offset")?;
+            directory[..4].copy_from_slice(&if little { offset.to_le_bytes() } else { offset.to_be_bytes() });
+            4
+        };
+        Ok(Self { source: Cursor::new(data), directory, directory_field, photometric: None })
+    }
+}
+
+impl Read for PageReader<'_> {
+    fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+        let start = self.source.position();
+        let length = self.source.read(output)?;
+        if length != 0 {
+            let start = start as usize;
+            let output = &mut output[..length];
+            replace_bytes(start, output, self.directory_field, &self.directory[..self.directory_field]);
+            if let Some((offset, value)) = &self.photometric {
+                replace_bytes(start, output, *offset, value);
+            }
+        }
+        Ok(length)
+    }
+}
+
+impl Seek for PageReader<'_> {
+    fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+        self.source.seek(position)
+    }
+}
+
+fn replace_bytes(start: usize, output: &mut [u8], offset: usize, value: &[u8]) {
+    let first = start.max(offset);
+    let end = (start + output.len()).min(offset + value.len());
+    if first < end {
+        output[first - start..end - start].copy_from_slice(&value[first - offset..end - offset]);
+    }
+}
+
+fn lab_photometric_patch(data: &[u8], directory: u64) -> Result<(usize, [u8; 2]), String> {
     let little = data.starts_with(b"II");
     let read = |offset: usize, count: usize| -> Result<usize, String> {
         let bytes = data.get(offset..offset.checked_add(count).ok_or("invalid TIFF offset")?).ok_or("truncated TIFF directory")?;
@@ -407,8 +475,9 @@ fn lab_tiff_as_rgb(data: &[u8]) -> Result<Vec<u8>, String> {
         };
         usize::try_from(value).map_err(|_| "invalid TIFF offset".into())
     };
-    let big = read(2, 2)? == 43;
-    let (offset, count_bytes, entry_bytes, value_offset) = if big { (read(8, 8)?, 8, 20, 12) } else { (read(4, 4)?, 2, 12, 8) };
+    let big = is_big_tiff(data);
+    let offset = usize::try_from(directory).map_err(|_| "invalid TIFF directory offset")?;
+    let (count_bytes, entry_bytes, value_offset) = if big { (8, 20, 12) } else { (2, 12, 8) };
     let count = read(offset, count_bytes)?;
     let start = offset.checked_add(count_bytes).ok_or("invalid TIFF offset")?;
     if count > data.len().saturating_sub(start) / entry_bytes {
@@ -420,13 +489,7 @@ fn lab_tiff_as_rgb(data: &[u8]) -> Result<Vec<u8>, String> {
             if read(entry + 2, 2)? != 3 || read(entry + 4, if big { 8 } else { 4 })? != 1 {
                 return Err("invalid TIFF photometric tag".into());
             }
-            let mut normalized = data.to_vec();
-            normalized[entry + value_offset..entry + value_offset + 2].copy_from_slice(&if little {
-                2_u16.to_le_bytes()
-            } else {
-                2_u16.to_be_bytes()
-            });
-            return Ok(normalized);
+            return Ok((entry + value_offset, if little { 2_u16.to_le_bytes() } else { 2_u16.to_be_bytes() }));
         }
     }
     Err("missing TIFF photometric tag".into())
@@ -528,8 +591,19 @@ pub fn decode_tiff(data: &[u8]) -> Result<Image, DecodeError> {
 
 fn decode_tiff_with_progress(data: &[u8], progress: &Progress) -> Result<Image, DecodeError> {
     let mut decoder = tiff::decoder::Decoder::new(Cursor::new(data)).map_err(DecodeError::with_diagnostic_source)?;
+    decode_current_page(data, &mut decoder, progress)
+}
+
+fn decode_current_page(data: &[u8], decoder: &mut tiff::decoder::Decoder<impl Read + Seek>, progress: &Progress) -> Result<Image, DecodeError> {
     let orientation = decoder.get_tag_u32(tiff::tags::Tag::Orientation).unwrap_or(1);
-    let mut image = decode_special_tiff(data, &mut decoder, progress)?.map_or_else(|| decode_rust_image(data, RustFormat::Tiff, "TIFF"), Ok)?;
+    let mut image = if let Some(image) = decode_special_tiff(data, decoder, progress)? {
+        image
+    } else {
+        let reader = PageReader::new(data, current_directory(decoder)?)?;
+        let fallback =
+            image::ImageReader::with_format(BufReader::new(reader), RustFormat::Tiff).into_decoder().map_err(DecodeError::with_diagnostic_source)?;
+        decode_pixels(fallback, "TIFF", None, LumaMode::Grayscale)?
+    };
     if image.pixel_mode() == PixelMode::L && image.bit_depth() == 16 {
         image.reinterpret_mode(PixelMode::I16).map_err(DecodeError::with_source)?;
     }
@@ -586,6 +660,18 @@ pub fn index_sequence_with_size_check(
     Ok(sequence)
 }
 
+/// Validate the sequence and collect directory offsets for direct page access.
+pub fn index_pages(data: &[u8], mut check_size: impl FnMut((u32, u32)) -> Result<(), DecodeError>) -> Result<Vec<u64>, DecodeError> {
+    let mut offsets = Vec::new();
+    visit_pages(data, |decoder, size| {
+        check_size(size)?;
+        offsets.try_reserve(1).map_err(|error| DecodeError::with_source(error).with_kind(CodecErrorKind::ResourceLimit))?;
+        offsets.push(current_directory(decoder)?);
+        Ok(())
+    })?;
+    Ok(offsets)
+}
+
 pub fn decode_frame(data: &[u8], target: usize) -> Result<blanket_codec_common::Sequence, DecodeError> {
     decode_frames(data, Some(target), &Progress::default())
 }
@@ -600,10 +686,10 @@ pub fn decode_frames_with_size_check(
     use blanket_codec_common::{Frame, Sequence};
     let mut sequence = Sequence::default();
     let mut index = 0;
-    visit_pages(data, |page, size| {
+    visit_pages(data, |decoder, size| {
         if target.is_none_or(|target| index == target) {
             check_size(size)?;
-            sequence.frames.push(Frame { image: decode_tiff_with_progress(page, progress)?, duration: None, disposal: 0, blend: 0 });
+            sequence.frames.push(Frame { image: decode_current_page(data, decoder, progress)?, duration: None, disposal: 0, blend: 0 });
             decode_checkpoint(progress)?;
         }
         index += 1;
@@ -612,49 +698,29 @@ pub fn decode_frames_with_size_check(
     Ok(sequence)
 }
 
-fn visit_pages(data: &[u8], mut visit: impl FnMut(&[u8], (u32, u32)) -> Result<(), DecodeError>) -> Result<(), DecodeError> {
-    use blanket_codec_common::validate_frame_budget;
-    let little = data.starts_with(b"II");
-    let read = |offset: usize, count: usize| -> Result<usize, String> {
-        let bytes = data.get(offset..offset.checked_add(count).ok_or("invalid TIFF offset")?).ok_or("truncated TIFF directory")?;
-        let value = if little {
-            bytes.iter().rev().fold(0_u64, |v, &b| (v << 8) | u64::from(b))
-        } else {
-            bytes.iter().fold(0_u64, |v, &b| (v << 8) | u64::from(b))
-        };
-        usize::try_from(value).map_err(|_| "invalid TIFF offset".into())
-    };
-    let big = read(2, 2)? == 43;
-    let (header, offset_bytes, count_bytes, entry_bytes) = if big { (8, 8, 8, 20) } else { (4, 4, 2, 12) };
-    let mut offset = read(header, offset_bytes)?;
-    let mut seen = rustc_hash::FxHashSet::default();
-    let mut page_data = Cow::Borrowed(data);
+/// Decode one page from an offset returned by indexing the same encoded data.
+pub fn decode_indexed_page(data: &[u8], offset: u64, progress: &Progress) -> Result<Image, DecodeError> {
+    let reader = PageReader::new(data, offset)?;
+    let mut decoder = tiff::decoder::Decoder::new(reader).map_err(DecodeError::with_diagnostic_source)?;
+    let image = decode_current_page(data, &mut decoder, progress)?;
+    decode_checkpoint(progress)?;
+    Ok(image)
+}
+
+fn visit_pages<'a>(
+    data: &'a [u8], mut visit: impl FnMut(&mut tiff::decoder::Decoder<Cursor<&'a [u8]>>, (u32, u32)) -> Result<(), DecodeError>,
+) -> Result<(), DecodeError> {
+    let mut decoder = tiff::decoder::Decoder::new(Cursor::new(data)).map_err(DecodeError::with_diagnostic_source)?;
     let mut total = 0;
-    while offset != 0 {
-        if !seen.insert(offset) {
-            return Err("cyclic TIFF page directories".into());
-        }
-        let count = read(offset, count_bytes)?;
-        let next = offset
-            .checked_add(count_bytes)
-            .and_then(|v| count.checked_mul(entry_bytes).and_then(|n| v.checked_add(n)))
-            .ok_or("TIFF directory overflow")?;
-        let next_offset = read(next, offset_bytes)?;
-        let bytes = if little { (offset as u64).to_le_bytes() } else { (offset as u64).to_be_bytes() };
-        let offset_data = if little { &bytes[..offset_bytes] } else { &bytes[8 - offset_bytes..] };
-        if &page_data[header..header + offset_bytes] != offset_data {
-            page_data.to_mut()[header..header + offset_bytes].copy_from_slice(offset_data);
-        }
-        let mut decoder = tiff::decoder::Decoder::new(Cursor::new(page_data.as_ref())).map_err(DecodeError::with_diagnostic_source)?;
+    loop {
         let (width, height) = decoder.dimensions().map_err(DecodeError::with_diagnostic_source)?;
         validate_frame_budget(&mut total, width, height)?;
-        visit(&page_data, (width, height))?;
-        offset = next_offset;
+        visit(&mut decoder, (width, height))?;
+        if !decoder.more_images() {
+            return Ok(());
+        }
+        decoder.next_image().map_err(DecodeError::with_diagnostic_source)?;
     }
-    if seen.is_empty() {
-        return Err("TIFF contains no pages".into());
-    }
-    Ok(())
 }
 pub fn encode_lab_tiff(image: &Image) -> PyResult<Vec<u8>> {
     if image.width() == 0 || image.height() == 0 {
@@ -865,7 +931,46 @@ pub fn encode_wide_tiff(image: &Image) -> PyResult<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
+    use blanket_codec_image::decode_rust_image;
+
     use super::*;
+
+    #[test]
+    fn indexed_pages_decode_mixed_layouts_in_any_order() {
+        use tiff::encoder::{TiffEncoder, TiffKind, colortype};
+
+        fn write_pages<K: TiffKind>(mut encoder: TiffEncoder<&mut Cursor<Vec<u8>>, K>) {
+            encoder.write_image::<colortype::Gray8>(2, 1, &[17, 23]).unwrap();
+            let mut lab = encoder.new_image::<colortype::RGB8>(1, 1).unwrap();
+            lab.encoder().write_tag(tiff::tags::Tag::PhotometricInterpretation, 8_u16).unwrap();
+            lab.write_data(&[87, 128, 255]).unwrap();
+        }
+
+        for big in [false, true] {
+            let mut output = Cursor::new(Vec::new());
+            if big {
+                write_pages(TiffEncoder::new_big(&mut output).unwrap());
+            } else {
+                write_pages(TiffEncoder::new(&mut output).unwrap());
+            }
+            let data = output.into_inner();
+            let mut sizes = Vec::new();
+            let offsets = index_pages(&data, |size| {
+                sizes.push(size);
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(sizes, [(2, 1), (1, 1)]);
+            let pages = decode_sequence(&data).unwrap();
+            assert_eq!(pages.frames[1].image.pixel_mode(), PixelMode::Lab);
+            for index in [1, 0, 1] {
+                let image = decode_indexed_page(&data, offsets[index], &Progress::default()).unwrap();
+                let expected = &pages.frames[index].image;
+                assert_eq!(image.pixel_mode(), expected.pixel_mode());
+                assert_eq!(image.raw_data().unwrap(), expected.raw_data().unwrap());
+            }
+        }
+    }
 
     #[test]
     fn region_decode_preserves_native_errors() {
@@ -999,9 +1104,18 @@ mod tests {
                 push(&mut data, 0, if big { 6 } else { 2 });
                 let mut expected = data.clone();
                 expected[value_offset..value_offset + 2].copy_from_slice(&if little { 2_u16.to_le_bytes() } else { 2_u16.to_be_bytes() });
-                assert_eq!(lab_tiff_as_rgb(&data).unwrap(), expected);
+                let directory = if big { 16 } else { 8 };
+                let mut reader = PageReader::new(&data, directory).unwrap();
+                reader.photometric = Some(lab_photometric_patch(&data, directory).unwrap());
+                let mut actual = Vec::new();
+                reader.read_to_end(&mut actual).unwrap();
+                assert_eq!(actual, expected);
+                reader.seek(SeekFrom::Start(value_offset as u64 + 1)).unwrap();
+                let mut byte = [0];
+                reader.read_exact(&mut byte).unwrap();
+                assert_eq!(byte[0], expected[value_offset + 1]);
                 for length in 0..data.len() {
-                    assert!(lab_tiff_as_rgb(&data[..length]).is_err());
+                    assert!(lab_photometric_patch(&data[..length], directory).is_err());
                 }
             }
         }

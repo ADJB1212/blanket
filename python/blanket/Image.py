@@ -4045,7 +4045,7 @@ def _open_deferred(data: bytes, header: ImageHeader) -> Image | None:
         return None
     if header.format != "JPEG":
         try:
-            count, loop_count, _ = _index_sequence(data, [header.format])
+            count, loop_count, _, _ = _index_sequence(data, [header.format])
         except (OSError, ValueError):
             return None
         if count != 1 or loop_count is not None:
@@ -4201,8 +4201,8 @@ def _decode(data: bytes, formats: list[str] | tuple[str, ...] | None, lazy: bool
     if lazy:
         from ._lazy_frames import LazyFrames
 
-        count, loop_count, default_image = _index_sequence(data, formats, tiff_size_check)
-        storage = LazyFrames(data, count, frame_cache_size, loop_count, default_image)
+        count, loop_count, default_image, tiff_offsets = _index_sequence(data, formats, tiff_size_check)
+        storage = LazyFrames(data, count, frame_cache_size, loop_count, default_image, tiff_offsets)
         first = storage.get(0, progress)
         image = Image(first._native)
         image._info = first._info
