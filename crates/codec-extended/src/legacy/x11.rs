@@ -134,19 +134,22 @@ fn strings_until(data: &[u8], limit: usize) -> Result<Vec<Cow<'_, [u8]>>, String
     Ok(result)
 }
 
-pub(super) fn inspect_xpm(data: &[u8]) -> Result<blanket_codec_common::ImageHeader, String> {
-    let values = strings_until(data, 1)?;
-    let header = values.first().ok_or("missing XPM header")?;
-    let nums = std::str::from_utf8(header)
-        .map_err(|_| "invalid XPM header")?
-        .split_whitespace()
-        .map(str::parse::<u32>)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| "invalid XPM header")?;
-    if nums.len() < 4 || nums[2] == 0 || nums[3] == 0 || nums[3] > 64 {
+fn xpm_values(header: &[u8]) -> Result<[u32; 4], String> {
+    let mut fields = std::str::from_utf8(header).map_err(|error| format!("invalid XPM header: {error}"))?.split_whitespace();
+    let mut values = [0; 4];
+    for value in &mut values {
+        *value = fields.next().ok_or("incomplete XPM header")?.parse().map_err(|error| format!("invalid XPM header value: {error}"))?;
+    }
+    if values[2] == 0 || !(1..=64).contains(&values[3]) {
         return Err("invalid XPM header".into());
     }
-    blanket_codec_common::ImageHeader::new(nums[0], nums[1], "P", 8)
+    Ok(values)
+}
+
+pub(super) fn inspect_xpm(data: &[u8]) -> Result<blanket_codec_common::ImageHeader, String> {
+    let values = strings_until(data, 1)?;
+    let [width, height, _, _] = xpm_values(values.first().ok_or("missing XPM header")?)?;
+    blanket_codec_common::ImageHeader::new(width, height, "P", 8)
 }
 
 fn color(value: &str) -> Result<[u8; 4], String> {
@@ -182,15 +185,11 @@ fn color(value: &str) -> Result<[u8; 4], String> {
 
 pub(super) fn decode_xpm(data: &[u8]) -> Result<Image, String> {
     let values = strings(data)?;
-    let header = std::str::from_utf8(values.first().ok_or("missing XPM header")?).map_err(|_| "invalid XPM header")?;
-    let nums = header.split_whitespace().take(4).map(str::parse::<u32>).collect::<Result<Vec<_>, _>>().map_err(|_| "invalid XPM header")?;
-    if nums.len() != 4 {
-        return Err("invalid XPM header".into());
-    }
-    let (w, h) = dimensions(nums[0], nums[1])?;
-    let n = nums[2] as usize;
-    let cpp = nums[3] as usize;
-    if n == 0 || cpp == 0 || cpp > 64 || n > values.len().saturating_sub(1) || h > values.len().saturating_sub(1 + n) {
+    let [width, height, colors, chars_per_pixel] = xpm_values(values.first().ok_or("missing XPM header")?)?;
+    let (w, h) = dimensions(width, height)?;
+    let n = colors as usize;
+    let cpp = chars_per_pixel as usize;
+    if n > values.len().saturating_sub(1) || h > values.len().saturating_sub(1 + n) {
         return Err("invalid XPM palette or rows".into());
     }
     let mut palette = FxHashMap::default();
@@ -267,6 +266,16 @@ pub(super) fn encode_xpm(im: &Image, pixels: &[u8]) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn xpm_inspection_accepts_optional_header_fields() {
+        for suffix in ["", " 0 0", " XPMEXT", " 0 0 XPMEXT"] {
+            let data = format!("\"1 1 1 1{suffix}\", \"a c #ff0000\", \"a\", \"XPMEXT notes\", \"XPMENDEXT\"");
+            let header = inspect_xpm(data.as_bytes()).unwrap();
+            assert_eq!((header.width, header.height, header.mode), (1, 1, "P"));
+            assert_eq!(decode_xpm(data.as_bytes()).unwrap().raw_data().unwrap(), [255, 0, 0]);
+        }
+    }
 
     #[test]
     fn xbm_rejects_empty_images() {
