@@ -346,14 +346,15 @@ def test_apng_native_deltas_with_transparency_and_disposal(mode: str) -> None:
     assert [frame.tobytes() for frame in frames] == originals
 
 
-def test_tiff_lzw_large_pages_preserve_strip_order() -> None:
+@pytest.mark.parametrize("lazy", [False, True])
+def test_tiff_lzw_large_pages_preserve_strip_order(lazy: bool) -> None:
     frames = []
     for i, mode in enumerate(("L", "RGBA", "RGB")):
         size = (513 + i * 2, 517 - i * 3)
         raw = bytes((j * 37 + j // 7 + i * 13) % 256 for j in range(size[0] * size[1] * len(mode)))
         frames.append(PillowImage.frombytes(mode, size, raw))
     stream = image_buffer(frames[0], "TIFF", save_all=True, append_images=frames[1:], compression="tiff_lzw", strip_size=8192)
-    actual = Image.open(stream)
+    actual = Image.open(stream, lazy=lazy)
     assert actual.n_frames == len(frames)
     for i in (2, 0, 1):
         actual.seek(i)

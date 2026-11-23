@@ -316,10 +316,12 @@ fn decode_lzw_strips(data: &[u8], decoder: &mut tiff::decoder::Decoder<impl Read
     if decoder.strip_count().map_err(|e| e.to_string())? != height.div_ceil(rows) {
         return Err("invalid TIFF strip count".into());
     }
+    let directory = current_directory(decoder).map_err(String::from)?;
     let mut pixels = vec![0; length];
     let strips_per_worker = height.div_ceil(rows).div_ceil(rayon::current_num_threads() as u32) as usize;
     pixels.par_chunks_mut(stride * rows as usize * strips_per_worker).enumerate().try_for_each(|(index, output)| {
-        let mut decoder = tiff::decoder::Decoder::new(Cursor::new(data)).map_err(|e| e.to_string())?;
+        let reader = PageReader::new(data, directory).map_err(String::from)?;
+        let mut decoder = tiff::decoder::Decoder::new(reader).map_err(|e| e.to_string())?;
         for (strip, output) in output.chunks_mut(stride * rows as usize).enumerate() {
             decoder.read_chunk_bytes((index * strips_per_worker + strip) as u32, output).map_err(|e| e.to_string())?;
         }
