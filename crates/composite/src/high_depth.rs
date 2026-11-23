@@ -81,7 +81,7 @@ pub(crate) fn paste(image: &mut Image, source: &Image, position: (i64, i64), mas
     let big_endian = image.pixel_mode().is_big_endian();
     let width = image.width() as usize;
     image.ensure_owned()?;
-    let pixels = image.pixels_mut().unwrap();
+    let pixels = image.pixels_mut()?;
     let count = (right - left) as usize;
     let mut values = if mask.is_some() { vec![0_u16; count * channels] } else { Vec::new() };
     for y in top..bottom {
@@ -177,7 +177,7 @@ pub(crate) fn composite_inplace(background: &mut Image, overlay: &Image) -> PyRe
     let source = samples::view(overlay)?;
     let maximum = u64::from(samples::maximum(background));
     background.ensure_owned()?;
-    let pixels = background.pixels_mut().expect("validated open image");
+    let pixels = background.pixels_mut()?;
     blanket_core::parallel::chunks_mut(pixels, 16 * 1024 * 8, |chunk, dst| {
         let source = &source[chunk * 16 * 1024 * 4..][..dst.len() / 2];
         let end = dst.len() / 128 * 128;
@@ -257,7 +257,7 @@ pub(crate) fn putalpha(image: &mut Image, alpha: &Image) -> PyResult<()> {
     if image.pixel_mode() == PixelMode::Rgba {
         image.raw_data()?;
         image.ensure_owned()?;
-        let pixels = image.pixels_mut().expect("validated open image");
+        let pixels = image.pixels_mut()?;
         blanket_core::parallel::chunks_mut(pixels, 16 * 1024 * 8, |chunk, dst| {
             let alpha = alpha_values.slice(chunk * 16 * 1024);
             let end = dst.len() / (16 * 8) * 16;

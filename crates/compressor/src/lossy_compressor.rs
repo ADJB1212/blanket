@@ -153,7 +153,7 @@ impl LossyImageCompressor {
                     rounded = Some(scratch);
                 }
                 let rounded = rounded.as_mut().expect("initialized PNG rounding scratch");
-                let destination = rounded.pixels_mut().expect("validated image");
+                let destination = rounded.pixels_mut()?;
                 round_png_pixels(pixels, destination, channels, &color_table);
                 if !self.within_perceptual_error(rounded, image)? {
                     progress.checkpoint()?;
@@ -171,7 +171,7 @@ impl LossyImageCompressor {
             }
         }
         if let (Some(color_table), Some(mut winner)) = (winner, rounded) {
-            round_png_pixels(pixels, winner.pixels_mut().expect("validated image"), channels, &color_table);
+            round_png_pixels(pixels, winner.pixels_mut()?, channels, &color_table);
             let optimized = LosslessImageCompressor { effort: self.effort }.encode_with_progress(&winner, ImageFormat::Png, options, progress)?;
             if optimized.len() < output.len() {
                 output = optimized;

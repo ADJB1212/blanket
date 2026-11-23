@@ -55,13 +55,13 @@ impl Quarter {
     }
 }
 
-fn ellipse_spans(a: i64, b: i64, width: i64, mut emit: impl FnMut(i64, i64, i64)) {
+fn ellipse_spans(a: i64, b: i64, width: i64, mut emit: impl FnMut(i64, i64, i64) -> PyResult<()>) -> PyResult<()> {
     if width < 1 {
-        return;
+        return Ok(());
     }
     let mut outer = Quarter::new(a, b);
     let Some((mut right, mut y)) = outer.next() else {
-        return;
+        return Ok(());
     };
     let mut inner = Quarter::new(a - 2 * (width - 1), b - 2 * (width - 1));
     let mut left = a % 2;
@@ -85,20 +85,21 @@ fn ellipse_spans(a: i64, b: i64, width: i64, mut emit: impl FnMut(i64, i64, i64)
         }
         left = inside.map_or(a % 2, |p| p.0);
         let positive = if l == 0 { 2 } else { l };
-        emit(-r, -row, -l);
+        emit(-r, -row, -l)?;
         if l > 0 || l < r {
-            emit(positive, -row, r);
+            emit(positive, -row, r)?;
         }
         if row > 0 {
-            emit(-r, row, -l);
+            emit(-r, row, -l)?;
             if l > 0 || l < r {
-                emit(positive, row, r);
+                emit(positive, row, r)?;
             }
         }
         if next.is_none() {
             break;
         }
     }
+    Ok(())
 }
 
 enum Clip {
@@ -209,7 +210,7 @@ fn pie_clip(a: i64, b: i64, start: f32, end: f32) -> Clip {
     if end - start < 90.0 { clip.and(Clip::Plane((xl + xr) / 2.0, (yl + yr) / 2.0, 0.0)) } else { clip }
 }
 
-fn render(image: &mut Image, bounds: (i64, i64, i64, i64), width: i64, clip: &Clip, ink: &[u8], blend: bool) {
+fn render(image: &mut Image, bounds: (i64, i64, i64, i64), width: i64, clip: &Clip, ink: &[u8], blend: bool) -> PyResult<()> {
     let (x0, y0, x1, y1) = bounds;
     let (a, b) = (x1 - x0, y1 - y0);
     let height = i64::from(image.height());
@@ -217,21 +218,21 @@ fn render(image: &mut Image, bounds: (i64, i64, i64, i64), width: i64, clip: &Cl
     ellipse_spans(a, b, width, |l, y, r| {
         let row = y0 + (y + b) / 2;
         if row < 0 || row >= height {
-            return;
+            return Ok(());
         }
         if matches!(clip, Clip::Pass) {
-            spans.write(x0 + (l + a) / 2, x0 + (r + a) / 2, row);
-            return;
+            return spans.write(x0 + (l + a) / 2, x0 + (r + a) / 2, row);
         }
         for (left, right) in clip.spans(l, y, r) {
-            spans.write(x0 + (left + a) / 2, x0 + (right + a) / 2, row);
+            spans.write(x0 + (left + a) / 2, x0 + (right + a) / 2, row)?;
         }
-    });
+        Ok(())
+    })
 }
 
-pub(crate) fn ellipse(image: &mut Image, bounds: (i64, i64, i64, i64), width: i64, ink: &[u8], blend: bool) {
+pub(crate) fn ellipse(image: &mut Image, bounds: (i64, i64, i64, i64), width: i64, ink: &[u8], blend: bool) -> PyResult<()> {
     let width = if width == 0 { bounds.2 - bounds.0 + bounds.3 - bounds.1 } else { width };
-    render(image, bounds, width, &Clip::Pass, ink, blend);
+    render(image, bounds, width, &Clip::Pass, ink, blend)
 }
 
 #[pyfunction]
@@ -259,8 +260,7 @@ pub(crate) fn draw_curve(
     let width = width.min(a.max(b) + 1);
     value.py().detach(|| {
         if end == start + 360.0 {
-            ellipse(image, bounds, if filled { 0 } else { width }, &ink, blend);
-            return;
+            return ellipse(image, bounds, if filled { 0 } else { width }, &ink, blend);
         }
         let (xl, yl, xr, yr) = endpoints(a, b, start, end);
         let line_a = yr - yl;
@@ -273,20 +273,19 @@ pub(crate) fn draw_curve(
         };
         if !filled && style == "chord" {
             let chord = Clip::Plane(line_a, line_b, line_c).and(Clip::Plane(-line_a, -line_b, 2.0 * width as f64 * line_a.hypot(line_b) - line_c));
-            render(image, bounds, a + b + 1, &chord, &ink, blend);
+            render(image, bounds, a + b + 1, &chord, &ink, blend)?;
         } else if !filled && style == "pie" {
             for (x, y) in [(xl, yl), (xr, yr)] {
                 let c = width as f64 * x.hypot(y);
                 let side = Clip::Plane(-y, x, c).and(Clip::Plane(y, -x, c)).and(Clip::Plane(x, y, 0.0));
-                render(image, bounds, a + b + 1, &side, &ink, blend);
+                render(image, bounds, a + b + 1, &side, &ink, blend)?;
             }
             let x = ((bounds.0 + bounds.2 - width) as f64 / 2.0).round() as i64;
             let y = ((bounds.1 + bounds.3 - width) as f64 / 2.0).round() as i64;
-            ellipse(image, (x, y, x + width - 1, y + width - 1), 0, &ink, blend);
+            ellipse(image, (x, y, x + width - 1, y + width - 1), 0, &ink, blend)?;
         }
-        render(image, bounds, if filled { a + b + 1 } else { width }, &clip, &ink, blend);
-    });
-    Ok(())
+        render(image, bounds, if filled { a + b + 1 } else { width }, &clip, &ink, blend)
+    })
 }
 
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -328,9 +327,9 @@ fn round_down(value: f64) -> i64 {
     if value >= 0.0 { (value - 0.5).ceil() as i64 } else { -((-value - 0.5).ceil() as i64) }
 }
 
-fn polygon_spans(points: &[(i64, i64)], height: u32, blend: bool, emit: impl FnMut(i64, i64, i64)) {
+fn polygon_spans(points: &[(i64, i64)], height: u32, blend: bool, emit: impl FnMut(i64, i64, i64) -> PyResult<()>) -> PyResult<()> {
     if points.len() < 2 {
-        return;
+        return Ok(());
     }
     let mut edges: Vec<Edge> = Vec::with_capacity(points.len());
     for (i, pair) in points.windows(2).enumerate() {
@@ -350,19 +349,19 @@ fn polygon_spans(points: &[(i64, i64)], height: u32, blend: bool, emit: impl FnM
     if points.last() != points.first() {
         edges.push(Edge::new(*points.last().unwrap(), points[0]));
     }
-    edge_spans(&edges, height, blend, emit);
+    edge_spans(&edges, height, blend, emit)
 }
 
-fn edge_spans(edges: &[Edge], height: u32, blend: bool, mut emit: impl FnMut(i64, i64, i64)) {
+fn edge_spans(edges: &[Edge], height: u32, blend: bool, mut emit: impl FnMut(i64, i64, i64) -> PyResult<()>) -> PyResult<()> {
     if edges.is_empty() {
-        return;
+        return Ok(());
     }
     let first = edges.iter().map(|e| e.ymin).min().unwrap().max(0);
     let last = edges.iter().map(|e| e.ymax).max().unwrap().min(i64::from(height));
     if !blend {
         for edge in edges {
             if edge.ymin == edge.ymax {
-                emit(edge.xmin, edge.ymin, edge.xmax);
+                emit(edge.xmin, edge.ymin, edge.xmax)?;
             }
         }
     }
@@ -415,7 +414,7 @@ fn edge_spans(edges: &[Edge], height: u32, blend: bool, mut emit: impl FnMut(i64
             .filter(|&(l, r)| l <= r);
         if !blend {
             for (l, r) in row_spans {
-                emit(l, y, r);
+                emit(l, y, r)?;
             }
             continue;
         }
@@ -441,9 +440,10 @@ fn edge_spans(edges: &[Edge], height: u32, blend: bool, mut emit: impl FnMut(i64
         }
         spans.truncate(kept);
         for &(l, r) in &spans {
-            emit(l, y, r);
+            emit(l, y, r)?;
         }
     }
+    Ok(())
 }
 
 #[pyfunction]
@@ -454,16 +454,16 @@ fn draw_outline(image: &mut Image, outline: &super::geometry::Outline, value: &B
     let height = image.height();
     value.py().detach(|| {
         let mut spans = super::draw::SpanWriter::new(image, &ink, blend);
-        edge_spans(&edges, height, blend, |l, y, r| spans.write(l, r, y));
-    });
-    Ok(())
+        edge_spans(&edges, height, blend, |l, y, r| spans.write(l, r, y))
+    })
 }
 
-fn wide_line(a: (i64, i64), b: (i64, i64), width: i64, height: u32, blend: bool, emit: &mut impl FnMut(i64, i64, i64)) {
+fn wide_line(
+    a: (i64, i64), b: (i64, i64), width: i64, height: u32, blend: bool, emit: &mut impl FnMut(i64, i64, i64) -> PyResult<()>,
+) -> PyResult<()> {
     let (dx, dy) = ((i128::from(b.0) - i128::from(a.0)) as f64, (i128::from(b.1) - i128::from(a.1)) as f64);
     if dx == 0.0 && dy == 0.0 {
-        emit(a.0, a.1, a.0);
-        return;
+        return emit(a.0, a.1, a.0);
     }
     let half = (width - 1) as f64 / 2.0;
     let max = half.round() / dx.hypot(dy);
@@ -479,7 +479,7 @@ fn wide_line(a: (i64, i64), b: (i64, i64), width: i64, height: u32, blend: bool,
         height,
         blend,
         emit,
-    );
+    )
 }
 
 #[pyfunction]
@@ -499,15 +499,13 @@ fn draw_polygon(
                 super::draw::thin_line(image, (a.0 as f64, a.1 as f64), (b.0 as f64, b.1 as f64), &ink, blend)
             };
             for pair in points.windows(2) {
-                line(image, pair[0], pair[1]);
+                line(image, pair[0], pair[1])?;
             }
             if closed {
-                line(image, *points.last().unwrap(), points[0]);
-            } else {
-                let p = *points.last().unwrap();
-                super::draw::paint(image, p.0, p.1, &ink, blend);
+                return line(image, *points.last().unwrap(), points[0]);
             }
-            return;
+            let p = *points.last().unwrap();
+            return super::draw::paint(image, p.0, p.1, &ink, blend);
         }
         if let Some(interior) = &mut interior {
             polygon_spans(&points, h, false, |l, y, r| {
@@ -517,7 +515,8 @@ fn draw_polygon(
                         interior[y as usize].push((l, r));
                     }
                 }
-            });
+                Ok(())
+            })?;
             for spans in interior {
                 spans.sort_unstable();
                 let mut kept = 0;
@@ -537,31 +536,32 @@ fn draw_polygon(
         let mut emit = |l: i64, y: i64, r: i64| {
             if let Some(interior) = &interior {
                 if y < 0 || y >= i64::from(h) {
-                    return;
+                    return Ok(());
                 }
                 for &(left, right) in &interior[y as usize] {
                     if left > r {
                         break;
                     }
                     if right >= l {
-                        spans.write(left.max(l), right.min(r), y);
+                        spans.write(left.max(l), right.min(r), y)?;
                     }
                 }
             } else {
-                spans.write(l, r, y);
+                spans.write(l, r, y)?;
             }
+            Ok(())
         };
         if filled {
-            polygon_spans(&points, h, blend, emit);
+            polygon_spans(&points, h, blend, emit)?;
         } else {
             let width = if interior.is_some() { width.saturating_mul(2) - 1 } else { width };
             for pair in points.windows(2) {
-                wide_line(pair[0], pair[1], width, h, blend, &mut emit);
+                wide_line(pair[0], pair[1], width, h, blend, &mut emit)?;
             }
             if closed {
-                wide_line(*points.last().unwrap(), points[0], width, h, blend, &mut emit);
+                wide_line(*points.last().unwrap(), points[0], width, h, blend, &mut emit)?;
             }
         }
-    });
-    Ok(())
+        Ok(())
+    })
 }

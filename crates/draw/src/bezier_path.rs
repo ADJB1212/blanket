@@ -168,18 +168,18 @@ fn draw_bezier_path(
         let dashed = if outline.is_some() && !lengths.is_empty() { dash_path(&path, &lengths, dash_offset)? } else { None };
         let centerline = if lengths.is_empty() { Some(&path) } else { dashed.as_ref() };
         if let Some(fill) = fill {
-            rasterize(image, &path, fill_rule, &fill, blend, antialias);
+            rasterize(image, &path, fill_rule, &fill, blend, antialias)?;
         }
         if let Some((centerline, outline)) = centerline.zip(outline)
             && let Some(stroke) = centerline.stroke(&stroke, 1.0)
         {
-            rasterize(image, &stroke, FillRule::Winding, &outline, blend, antialias);
+            rasterize(image, &stroke, FillRule::Winding, &outline, blend, antialias)?;
         }
         Ok(())
     })
 }
 
-fn rasterize(image: &mut Image, path: &Path, rule: FillRule, ink: &[u8], blend: bool, antialias: bool) {
+fn rasterize(image: &mut Image, path: &Path, rule: FillRule, ink: &[u8], blend: bool, antialias: bool) -> PyResult<()> {
     const TILE: u32 = 512;
     let bounds = path.bounds();
     // The rasterizer samples at half-integers. Blanket pixel centers are integers.
@@ -188,7 +188,7 @@ fn rasterize(image: &mut Image, path: &Path, rule: FillRule, ink: &[u8], blend: 
     let right = ((f64::from(bounds.right()) + 1.0).ceil() as u32).min(image.width());
     let bottom = ((f64::from(bounds.bottom()) + 1.0).ceil() as u32).min(image.height());
     if left >= right || top >= bottom {
-        return;
+        return Ok(());
     }
     let width = TILE.min(right - left);
     let height = TILE.min(bottom - top);
@@ -200,9 +200,10 @@ fn rasterize(image: &mut Image, path: &Path, rule: FillRule, ink: &[u8], blend: 
             mask.fill_path(path, rule, antialias, transform);
             for (row, values) in mask.data().chunks_exact(width as usize).take((bottom - y) as usize).enumerate() {
                 for (column, &coverage) in values.iter().take((right - x) as usize).enumerate() {
-                    coverage_paint(image, i64::from(x) + column as i64, i64::from(y) + row as i64, ink, blend, coverage);
+                    coverage_paint(image, i64::from(x) + column as i64, i64::from(y) + row as i64, ink, blend, coverage)?;
                 }
             }
         }
     }
+    Ok(())
 }

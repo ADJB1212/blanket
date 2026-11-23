@@ -88,17 +88,15 @@ impl Image {
 
     /// Mutable owned samples, without allowing the storage length to change.
     /// Modified 10/12-bit samples are validated on their next read.
-    pub fn pixels_mut(&mut self) -> Option<&mut [u8]> {
+    pub fn pixels_mut(&mut self) -> PyResult<&mut [u8]> {
+        let pixels = self.pixels.as_mut().ok_or_else(|| PyValueError::new_err("image has no owned pixel storage"))?;
+        if Arc::get_mut(pixels).is_none() {
+            *pixels = Arc::new(crate::buffers::copy(pixels.as_slice())?);
+        }
         if matches!(self.bit_depth, 10 | 12) {
             self.sample_validation.0.store(false, Ordering::Relaxed);
         }
-        let pixels = self.pixels.as_mut()?;
-        if Arc::strong_count(pixels) > 1
-            && let Ok(copy) = crate::buffers::copy(pixels.as_slice())
-        {
-            *pixels = Arc::new(copy);
-        }
-        Some(Arc::make_mut(pixels).as_mut_slice())
+        Ok(Arc::get_mut(pixels).expect("pixel storage is unique").as_mut_slice())
     }
 
     pub fn shared_pixels(&self) -> Option<&dyn SharedPixels> {

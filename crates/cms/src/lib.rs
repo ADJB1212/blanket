@@ -324,7 +324,7 @@ impl CmsTransform {
             }
             let transform = &state.transforms.iter().find(|(cached_depth, _)| *cached_depth == depth).unwrap().1;
             let stride = image.raw_bytes_per_pixel();
-            let pixels = image.pixels_mut().ok_or_else(|| error("operation on closed image"))?;
+            let pixels = image.pixels_mut()?;
             let swapped = depth > 8 && self.input.is_big_endian() != cfg!(target_endian = "big");
             if swapped {
                 swap_samples(pixels, depth);

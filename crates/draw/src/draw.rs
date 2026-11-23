@@ -44,20 +44,20 @@ pub(crate) fn ink(image: &Image, value: &Bound<'_, PyAny>, blend: bool) -> PyRes
     pixel.into_pixels()
 }
 
-pub(crate) fn paint(image: &mut Image, x: i64, y: i64, ink: &[u8], blend: bool) {
-    paint_points(image, std::iter::once((x, y)), ink, blend);
+pub(crate) fn paint(image: &mut Image, x: i64, y: i64, ink: &[u8], blend: bool) -> PyResult<()> {
+    paint_points(image, std::iter::once((x, y)), ink, blend)
 }
 
-fn paint_points(image: &mut Image, points: impl Iterator<Item = (i64, i64)>, ink: &[u8], blend: bool) {
+fn paint_points(image: &mut Image, points: impl Iterator<Item = (i64, i64)>, ink: &[u8], blend: bool) -> PyResult<()> {
     let width = i64::from(image.width());
     let height = i64::from(image.height());
     let stride = image.pixel_mode().channels() * image.pixel_mode().sample_bytes();
     let mut offsets =
         points.filter(|&(x, y)| x >= 0 && y >= 0 && x < width && y < height).map(|(x, y)| (y as usize * width as usize + x as usize) * stride);
     let Some(first) = offsets.next() else {
-        return;
+        return Ok(());
     };
-    let pixels = image.pixels_mut().unwrap();
+    let pixels = image.pixels_mut()?;
     let offsets = std::iter::once(first).chain(offsets);
     if blend {
         let alpha = u32::from(ink[3]);
@@ -71,6 +71,7 @@ fn paint_points(image: &mut Image, points: impl Iterator<Item = (i64, i64)>, ink
             pixels[offset..offset + stride].copy_from_slice(ink);
         }
     }
+    Ok(())
 }
 
 /// Truncate a coordinate toward zero, as Python's int() does for numbers.
@@ -119,8 +120,7 @@ fn draw_points(image: &mut Image, xy: &Bound<'_, PyAny>, value: &Bound<'_, PyAny
     let points = coords(xy)?;
     let ink = ink(image, value, blend)?;
     image.ensure_owned()?;
-    value.py().detach(|| paint_points(image, points.into_iter(), &ink, blend));
-    Ok(())
+    value.py().detach(|| paint_points(image, points.into_iter(), &ink, blend))
 }
 
 #[pyfunction]
@@ -133,34 +133,34 @@ pub(crate) fn draw_rectangle(image: &mut Image, bounds: (i64, i64, i64, i64), va
         let mut spans = SpanWriter::new(image, &ink, blend);
         if width == 0 {
             for y in top.max(0)..=bottom.min(i64::from(size.1) - 1) {
-                spans.write(left, right, y);
+                spans.write(left, right, y)?;
             }
         } else if !blend && width > 0 && width <= right.saturating_sub(left) / 2 && width <= bottom.saturating_sub(top) / 2 {
             for y in top.max(0)..=bottom.min(i64::from(size.1) - 1) {
                 if y.saturating_sub(top) < width || bottom.saturating_sub(y) < width {
-                    spans.write(left, right, y);
+                    spans.write(left, right, y)?;
                 } else {
-                    spans.write(left, left + width - 1, y);
-                    spans.write(right - width + 1, right, y);
+                    spans.write(left, left + width - 1, y)?;
+                    spans.write(right - width + 1, right, y)?;
                 }
             }
         } else {
             let ranges = outline_ranges(bounds, width, size);
             for i in ranges.into_iter().flatten() {
-                spans.write(left, right, top.saturating_add(i));
-                spans.write(left, right, bottom.saturating_sub(i));
+                spans.write(left, right, top.saturating_add(i))?;
+                spans.write(left, right, bottom.saturating_sub(i))?;
                 let start = top.saturating_add(width);
                 let end = bottom.saturating_sub(width).saturating_add(1);
                 let (first, last) = if start < end { (start, end - 1) } else { (end.saturating_add(1), start) };
                 let (r, l) = (right.saturating_sub(i), left.saturating_add(i));
                 for y in first.max(0)..=last.min(i64::from(size.1) - 1) {
-                    spans.write(r, r, y);
-                    spans.write(l, l, y);
+                    spans.write(r, r, y)?;
+                    spans.write(l, l, y)?;
                 }
             }
         }
-    });
-    Ok(())
+        Ok(())
+    })
 }
 
 fn outline_ranges(bounds: (i64, i64, i64, i64), width: i64, size: (u32, u32)) -> [std::ops::Range<i64>; 4] {
@@ -209,21 +209,21 @@ impl<'image, 'ink> SpanWriter<'image, 'ink> {
         }
     }
 
-    pub(crate) fn write(&mut self, left: i64, right: i64, y: i64) {
+    pub(crate) fn write(&mut self, left: i64, right: i64, y: i64) -> PyResult<()> {
         let left = left.max(0);
         let right = right.min(self.width - 1);
         if y < 0 || y >= self.height || left > right || self.alpha == 0 {
-            return;
+            return Ok(());
         }
         // Defer copy-on-write until a visible span needs painting.
         if let Some(image) = self.image.take() {
-            self.pixels = image.pixels_mut().unwrap();
+            self.pixels = image.pixels_mut()?;
         }
         let start = (y as usize * self.width as usize + left as usize) * self.stride;
         let pixels = &mut self.pixels[start..start + (right - left + 1) as usize * self.stride];
         if self.alpha != 255 {
             blanket_core::pixels::blend_solid_rgb(pixels, [self.ink[0], self.ink[1], self.ink[2]], self.alpha);
-            return;
+            return Ok(());
         }
         match self.stride {
             1 => pixels.fill(self.ink[0]),
@@ -238,6 +238,7 @@ impl<'image, 'ink> SpanWriter<'image, 'ink> {
             16 => fill_span::<16>(pixels, self.ink),
             _ => unreachable!(),
         }
+        Ok(())
     }
 }
 
@@ -245,23 +246,25 @@ fn fill_span<const C: usize>(pixels: &mut [u8], ink: &[u8]) {
     pixels.as_chunks_mut::<C>().0.fill(ink.try_into().unwrap());
 }
 
-pub(crate) fn coverage_paint(image: &mut Image, x: i64, y: i64, ink: &[u8], blend: bool, coverage: u8) {
+pub(crate) fn coverage_paint(image: &mut Image, x: i64, y: i64, ink: &[u8], blend: bool, coverage: u8) -> PyResult<()> {
     if coverage == 255 {
-        paint(image, x, y, ink, blend);
-    } else if coverage != 0 && x >= 0 && y >= 0 && x < i64::from(image.width()) && y < i64::from(image.height()) {
+        return paint(image, x, y, ink, blend);
+    }
+    if coverage != 0 && x >= 0 && y >= 0 && x < i64::from(image.width()) && y < i64::from(image.height()) {
         let stride = image.pixel_mode().channels();
         let offset = (y as usize * image.width() as usize + x as usize) * stride;
-        let pixel = &mut image.pixels_mut().unwrap()[offset..offset + stride];
+        let pixel = &mut image.pixels_mut()?[offset..offset + stride];
         let alpha = if blend { (u32::from(coverage) * u32::from(ink[3]) + 127) / 255 } else { u32::from(coverage) };
         for (dst, src) in pixel.iter_mut().zip(ink) {
             *dst = ((u32::from(*dst) * (255 - alpha) + u32::from(*src) * alpha + 127) / 255) as u8;
         }
     }
+    Ok(())
 }
 
-fn paint_subpixel(image: &mut Image, x: i64, y: i64, ink: &[u8], blend: bool, covered: i32, samples: i32) {
+fn paint_subpixel(image: &mut Image, x: i64, y: i64, ink: &[u8], blend: bool, covered: i32, samples: i32) -> PyResult<()> {
     let total = samples * samples;
-    coverage_paint(image, x, y, ink, blend, ((covered * 255 + total / 2) / total) as u8);
+    coverage_paint(image, x, y, ink, blend, ((covered * 255 + total / 2) / total) as u8)
 }
 
 fn supports_coverage(image: &Image) -> bool {
@@ -328,13 +331,13 @@ fn advance_edges<'a>(edges: &[&'a PathEdge], next: &mut usize, active: &mut Vec<
     }
 }
 
-pub(crate) fn thin_line(image: &mut Image, a: (f64, f64), b: (f64, f64), ink: &[u8], blend: bool) {
+pub(crate) fn thin_line(image: &mut Image, a: (f64, f64), b: (f64, f64), ink: &[u8], blend: bool) -> PyResult<()> {
     let dx = b.0 - a.0;
     let dy = b.1 - a.1;
     let horizontal = dx.abs() > dy.abs();
     let (start, delta, minor, limit) = if horizontal { (a.0, dx, dy, image.width()) } else { (a.1, dy, dx, image.height()) };
     if delta == 0.0 {
-        return;
+        return Ok(());
     }
     let length = delta.abs();
     let sign = delta.signum();
@@ -349,7 +352,7 @@ pub(crate) fn thin_line(image: &mut Image, a: (f64, f64), b: (f64, f64), ink: &[
         let offset = (step * minor.abs() / length + 0.5).floor() * minor.signum();
         Some(if horizontal { (i64::from(coordinate), (a.1 + offset) as i64) } else { ((a.0 + offset) as i64, i64::from(coordinate)) })
     });
-    paint_points(image, points, ink, blend);
+    paint_points(image, points, ink, blend)
 }
 
 #[pyfunction]
@@ -368,8 +371,7 @@ pub(crate) fn draw_ellipse(
     let extent_y = i128::from(bounds.3) - i128::from(bounds.1);
     if !antialias && (0..=1_000_000).contains(&extent_x) && (0..=1_000_000).contains(&extent_y) {
         let width = width.min(extent_x.max(extent_y) as i64 + 1);
-        value.py().detach(|| crate::pillow::ellipse(image, bounds, width, &ink, blend));
-        return Ok(());
+        return value.py().detach(|| crate::pillow::ellipse(image, bounds, width, &ink, blend));
     }
     let (left, top, right, bottom) = bounds;
     let rx = (right as f64 - left as f64 + 1.0) / 2.0;
@@ -392,11 +394,11 @@ pub(crate) fn draw_ellipse(
                         covered += i32::from(outer && !inner);
                     }
                 }
-                paint_subpixel(image, x, y, &ink, blend, covered, samples);
+                paint_subpixel(image, x, y, &ink, blend, covered, samples)?;
             }
         }
-    });
-    Ok(())
+        Ok(())
+    })
 }
 
 #[pyfunction]
@@ -430,11 +432,10 @@ fn draw_path(
     value.py().detach(|| {
         if style == "line" && !antialias && width == 1.0 && points.iter().all(|&(x, y)| x.fract() == 0.0 && y.fract() == 0.0) {
             for pair in points.windows(2) {
-                thin_line(image, pair[0], pair[1], &ink, blend);
+                thin_line(image, pair[0], pair[1], &ink, blend)?;
             }
             let last = points[points.len() - 1];
-            paint(image, last.0 as i64, last.1 as i64, &ink, blend);
-            return;
+            return paint(image, last.0 as i64, last.1 as i64, &ink, blend);
         }
         let radius = width.max(1.0) / 2.0;
         let left = points.iter().map(|p| p.0).fold(f64::INFINITY, f64::min) - radius;
@@ -511,11 +512,11 @@ fn draw_path(
                         covered += i32::from(hit);
                     }
                 }
-                paint_subpixel(image, x, y, &ink, blend, covered, samples);
+                paint_subpixel(image, x, y, &ink, blend, covered, samples)?;
             }
         }
-    });
-    Ok(())
+        Ok(())
+    })
 }
 
 #[pyfunction]
@@ -560,7 +561,7 @@ fn draw_mask_impl(
         let top = (-stroke).max(position.1.saturating_neg());
         let bottom = (size.1 as i64).saturating_add(stroke).min(i64::from(image.height()).saturating_sub(position.1));
         if left >= right || top >= bottom || mask.is_empty() {
-            return;
+            return Ok(());
         }
         let mode = image.pixel_mode();
         let width = image.width() as usize;
@@ -577,7 +578,7 @@ fn draw_mask_impl(
             };
             if packed {
                 let start = ((position.1 + y) as usize * width + (position.0 + left) as usize) * channels;
-                let dst = &mut image.pixels_mut().unwrap()[start..start + coverage.len() * channels];
+                let dst = &mut image.pixels_mut()?[start..start + coverage.len() * channels];
                 match channels {
                     1 => paint_bitmap_mask::<1>(dst, coverage, &ink, blend, bilevel),
                     2 => paint_bitmap_mask::<2>(dst, coverage, &ink, blend, bilevel),
@@ -597,14 +598,14 @@ fn draw_mask_impl(
                         let weight = if channel < 3 && dst[3] == 0 { 255 } else { u32::from(coverage) };
                         pixel[channel] = ((u32::from(ink[channel]) * weight + u32::from(dst[channel]) * (255 - weight) + 127) / 255) as u8;
                     }
-                    paint(image, position.0.saturating_add(x), position.1.saturating_add(y), &pixel, false);
+                    paint(image, position.0.saturating_add(x), position.1.saturating_add(y), &pixel, false)?;
                 } else {
-                    coverage_paint(image, position.0.saturating_add(x), position.1.saturating_add(y), &ink, blend, coverage);
+                    coverage_paint(image, position.0.saturating_add(x), position.1.saturating_add(y), &ink, blend, coverage)?;
                 }
             }
         }
-    });
-    Ok(())
+        Ok(())
+    })
 }
 
 fn paint_bitmap_mask<const C: usize>(dst: &mut [u8], mask: &[u8], ink: &[u8], blend: bool, bilevel: bool) {
@@ -736,17 +737,16 @@ fn draw_floodfill(
     if x < 0 || y < 0 || x >= i64::from(image.width()) || y >= i64::from(image.height()) {
         return Ok(());
     }
-    py.detach(|| floodfill(image, (x, y), &fill, border.as_deref(), threshold));
-    Ok(())
+    py.detach(|| floodfill(image, (x, y), &fill, border.as_deref(), threshold))
 }
 
-fn floodfill(image: &mut Image, position: (i64, i64), fill: &[u8], border: Option<&[u8]>, threshold: f64) {
+fn floodfill(image: &mut Image, position: (i64, i64), fill: &[u8], border: Option<&[u8]>, threshold: f64) -> PyResult<()> {
     let (x, y) = position;
     let mode = image.pixel_mode();
     let stride = mode.channels() * mode.sample_bytes();
     let width = image.width() as usize;
     let seed_index = y as usize * width + x as usize;
-    let pixels = image.pixels_mut().unwrap();
+    let pixels = image.pixels_mut()?;
     match stride {
         1 => flood_pixels::<1>(pixels, seed_index, width, fill, border, mode, threshold),
         2 => flood_pixels::<2>(pixels, seed_index, width, fill, border, mode, threshold),
@@ -756,6 +756,7 @@ fn floodfill(image: &mut Image, position: (i64, i64), fill: &[u8], border: Optio
         16 => flood_pixels::<16>(pixels, seed_index, width, fill, border, mode, threshold),
         _ => unreachable!(),
     }
+    Ok(())
 }
 
 fn flood_pixels<const C: usize>(
@@ -852,9 +853,9 @@ mod tests {
                     for y in [-1, 0, 1, 2, 3] {
                         let mut actual = source.clone();
                         let mut expected = source.clone();
-                        SpanWriter::new(&mut actual, &ink, false).write(left, right, y);
+                        SpanWriter::new(&mut actual, &ink, false).write(left, right, y).unwrap();
                         for x in left..=right {
-                            paint(&mut expected, x, y, &ink, false);
+                            paint(&mut expected, x, y, &ink, false).unwrap();
                         }
                         assert_eq!(actual.raw_data().unwrap(), expected.raw_data().unwrap(), "{mode:?}, width {width}, ({left}, {y}, {right})");
                     }
@@ -874,7 +875,7 @@ mod tests {
             let expected = [&fill, &barrier, &seed, &fill, &barrier, &seed, &fill, &barrier, &seed].map(Vec::as_slice).concat();
             for border in [None, Some(barrier.as_slice())] {
                 let mut image = Image::from_raw_bytes(3, 3, mode, source.clone(), 32).unwrap();
-                floodfill(&mut image, (0, 1), &fill, border, 0.0);
+                floodfill(&mut image, (0, 1), &fill, border, 0.0).unwrap();
                 assert_eq!(image.raw_data().unwrap(), expected, "{mode:?}, border {border:?}");
             }
         }

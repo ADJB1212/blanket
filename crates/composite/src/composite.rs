@@ -141,7 +141,7 @@ fn image_fill(py: Python<'_>, image: &mut Image, color: &Image, position: (i64, 
     let row_bytes = image.width() as usize * stride;
     py.detach(|| {
         image.ensure_owned()?;
-        let pixels = image.pixels_mut().unwrap();
+        let pixels = image.pixels_mut()?;
         blanket_core::parallel::chunks_mut(&mut pixels[top as usize * row_bytes..bottom as usize * row_bytes], row_bytes * 32, |_, rows| {
             for row in rows.chunks_exact_mut(row_bytes) {
                 let row = &mut row[left as usize * stride..right as usize * stride];
@@ -193,7 +193,7 @@ fn image_paste(
     let fill_tile = fill_size.map(|_| std::array::from_fn::<_, 768, _>(|i| source_pixels[i % c]));
     py.detach(|| {
         image.ensure_owned()?;
-        let pixels = image.pixels_mut().expect("validated open image");
+        let pixels = image.pixels_mut()?;
         let count = (right - left) as usize;
         if mask_pixels.is_none() && count == width && count == source.width() as usize {
             let s = (top - position.1) as usize * count * c;
@@ -260,7 +260,7 @@ fn paste_integer(py: Python<'_>, image: &mut Image, source: &Image, position: (i
     let floating = image.pixel_mode().is_float();
     py.detach(|| {
         image.ensure_owned()?;
-        let pixels = image.pixels_mut().expect("validated open image");
+        let pixels = image.pixels_mut()?;
         if mask_pixels.is_none() {
             let row_bytes = (right - left) as usize * stride;
             if left == 0 && right == width && width as u32 == source.width() {
@@ -408,7 +408,7 @@ fn image_alpha_composite_inplace(py: Python<'_>, image: &mut Image, overlay: &Im
     let src_top = (top - position.1) as usize * src_stride;
     let source = &source[src_top..src_top + (bottom - top) as usize * src_stride];
     let start = left as usize * 4;
-    let pixels = image.pixels_mut().expect("validated open image");
+    let pixels = image.pixels_mut()?;
     py.detach(|| {
         let pixels = &mut pixels[top as usize * stride..bottom as usize * stride];
         if row_bytes == stride && row_bytes == src_stride {
@@ -531,7 +531,7 @@ fn image_putalpha_constant(py: Python<'_>, image: &mut Image, alpha: u16) -> PyR
     if matches!(image.pixel_mode(), PixelMode::La | PixelMode::Pa | PixelMode::Rgba) {
         image.ensure_owned()?;
         let stride = image.raw_bytes_per_pixel();
-        let pixels = image.pixels_mut().unwrap();
+        let pixels = image.pixels_mut()?;
         py.detach(|| match stride {
             2 => set_constant_alpha::<2, 1>(pixels, alpha),
             4 => set_constant_alpha::<4, 1>(pixels, alpha),
@@ -623,7 +623,7 @@ fn image_putalpha(py: Python<'_>, image: &mut Image, alpha: &Image) -> PyResult<
     }
     let source = image.pixel_data()?;
     if matches!(image.pixel_mode(), PixelMode::La | PixelMode::Pa) {
-        let pixels = image.pixels_mut().expect("validated open image");
+        let pixels = image.pixels_mut()?;
         py.detach(|| {
             blanket_core::parallel::chunks_mut(pixels, 32 * 1024, |chunk, pixels| {
                 for (pixel, &value) in pixels.as_chunks_mut::<2>().0.iter_mut().zip(&alpha[chunk * 16 * 1024..]) {
@@ -667,7 +667,7 @@ fn image_putalpha(py: Python<'_>, image: &mut Image, alpha: &Image) -> PyResult<
         image.replace_storage(Image::from_pixels(image.width(), image.height(), PixelMode::Rgba, pixels, None)?)?;
         return Ok(());
     }
-    let pixels = image.pixels_mut().expect("validated open image");
+    let pixels = image.pixels_mut()?;
     py.detach(|| {
         let offset = blanket_core::pixels::putalpha_rgba(pixels, alpha);
         for (pixel, &a) in pixels[offset * 4..].as_chunks_mut::<4>().0.iter_mut().zip(&alpha[offset..]) {

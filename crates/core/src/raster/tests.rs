@@ -140,7 +140,7 @@ fn changing_shared_storage_cannot_bypass_validation_on_detach() {
     storage.0.store(true, std::sync::atomic::Ordering::Relaxed);
     assert!(image.raw_data().is_err());
     assert!(image.ensure_owned().is_err());
-    assert!(image.pixels_mut().is_none());
+    assert!(image.pixels_mut().is_err());
     storage.0.store(false, std::sync::atomic::Ordering::Relaxed);
     image.ensure_owned().unwrap();
     assert_eq!(image.raw_data().unwrap(), [1, 2]);

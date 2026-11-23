@@ -138,7 +138,7 @@ pub fn convert_transparent_alpha(py: Python<'_>, source_image: &Image, mode: &st
     let red = ((u32::from(key[0]) * 255 + maximum / 2) / maximum) as u8;
     let key: Vec<u8> = key.into_iter().flat_map(|value| value.to_le_bytes().into_iter().take(sample_bytes)).collect();
     let source = source_image.raw_data()?;
-    let output = image.pixels_mut().unwrap();
+    let output = image.pixels_mut()?;
     py.detach(|| {
         for (pixel, output) in source.chunks_exact(key.len()).zip(output.chunks_exact_mut(stride)) {
             let transparent = if bilevel { (pixel[0] != 0) == (key[0] != 0) } else { pixel == key };
