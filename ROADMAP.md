@@ -420,8 +420,8 @@ with new processing semantics exposed explicitly.
 
 - [x] **Bezier curves** — stroke quadratic and cubic curves with
       `ImageDraw.bezier`, including optional antialiasing
-- [ ] **Bezier paths** — connect curves with configurable stroke joins, caps,
-      dash patterns, and fill rules
+- [x] **Bezier paths** — connect lines and curves with `ImageDraw.BezierPath`
+      and draw them with configurable stroke joins, caps, dash patterns, and fill rules
 - [ ] **Gradient and pattern fills** — linear and radial gradients, repeated
       image patterns, and reusable clipping masks for drawing operations
 - [x] **Vector export** — serialize path geometry, text runs, and basic shapes

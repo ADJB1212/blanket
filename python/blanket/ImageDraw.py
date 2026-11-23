@@ -16,9 +16,11 @@ from typing import TYPE_CHECKING, cast
 
 from . import Image
 from ._blanket import (
+    BezierPath,
     Outline,
     draw_arc_points,
     draw_bezier,
+    draw_bezier_path,
     draw_curve,
     draw_ellipse,
     draw_floodfill,
@@ -84,7 +86,7 @@ if TYPE_CHECKING:
 
     _Font = _MaskFont | _OffsetFont
 
-__all__ = ["Draw", "ImageDraw", "Outline", "floodfill"]
+__all__ = ["BezierPath", "Draw", "ImageDraw", "Outline", "floodfill"]
 
 
 _BINARY_TABLE = bytes([0] + [255] * 255)
@@ -448,6 +450,43 @@ class ImageDraw:
             width: Stroke thickness in pixels, with a minimum of one.
         """
         draw_bezier(self.im._native, xy, self._ink(fill), max(1, index(width)), bool(self.blend), bool(self.antialias))
+
+    def path(
+        self, path: BezierPath, fill: Color = None, outline: Color = None, width: float = 1, *, join: str = "round", cap: str = "round", dash: Sequence[float] | None = None, dash_offset: float = 0, miter_limit: float = 4, fill_rule: str = "nonzero"
+    ) -> None:
+        """Fill or stroke a reusable path of lines and Bézier curves.
+
+        Args:
+            path: Geometry built with :class:`BezierPath`. Open contours
+                close implicitly for fills. Call `close()` to close a stroke.
+            fill: Interior ink, or `None` to skip the fill.
+            outline: Stroke ink, or `None` to skip the stroke.
+            width: Centered stroke thickness in pixels. Zero skips the stroke.
+            join: Corner style, either `"round"`, `"bevel"`, or `"miter"`.
+            cap: Style for open ends and dash ends, either `"round"`, `"butt"`,
+                or `"square"`.
+            dash: Alternating painted and unpainted lengths in pixels.
+                An odd-length pattern repeats twice. An empty pattern is solid.
+            dash_offset: Position in the dash cycle at the start of each contour.
+            miter_limit: Maximum ratio of miter length to stroke width before
+                a miter join switches to bevel.
+            fill_rule: `"nonzero"` uses signed winding. `"evenodd"` uses crossing parity.
+
+        Examples:
+            ```python
+            from blanket import Image, ImageDraw
+
+            image = Image.new("RGB", (64, 48), "white")
+            path = ImageDraw.BezierPath()
+            path.move_to(4, 32)
+            path.quadratic_to(16, 4, 32, 20)
+            path.cubic_to(40, 28, 48, 4, 60, 20)
+            ImageDraw.Draw(image, antialias=True).path(path, outline="blue", width=3, dash=(6, 3))
+            ```
+        """
+        fill_ink = None if fill is None else self._ink(fill)
+        outline_ink = None if outline is None or width == 0 else self._ink(outline)
+        draw_bezier_path(self.im._native, path, (fill_ink, outline_ink), (width, join, cap, miter_limit), (() if dash is None else dash, dash_offset), fill_rule, (bool(self.blend), bool(self.antialias)))
 
     def pieslice(self, xy: Coords, start: float, end: float, fill: Color = None, outline: Color = None, width: int = 1) -> None:
         """Draw an elliptical sector bounded by an arc and two radii.

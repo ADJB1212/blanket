@@ -525,8 +525,10 @@ name = "blanket-draw"
 version = "0.7.0"
 dependencies = [
  "blanket-core",
+ "kurbo",
  "pyo3",
  "smallvec",
+ "tiny-skia",
 ]
 
 [[package]]

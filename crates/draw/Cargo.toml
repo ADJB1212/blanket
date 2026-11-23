@@ -10,8 +10,10 @@ publish = false
 
 [dependencies]
 blanket-core.workspace = true
+kurbo = "0.13"
 pyo3.workspace = true
 smallvec = { version = "1", default-features = false, features = ["const_generics"] }
+tiny-skia = { version = "0.12", default-features = false, features = ["std"] }
 
 [lib]
 doctest = false

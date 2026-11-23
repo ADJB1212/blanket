@@ -64,6 +64,117 @@ def test_bezier_rejects_invalid_geometry(points):
     assert image.getbbox() is None
 
 
+def test_bezier_path_connects_curves_and_closes_only_the_fill():
+    path = ImageDraw.BezierPath()
+    path.move_to(4, 22)
+    path.quadratic_to(4, 6, 16, 6)
+    path.cubic_to(24, 6, 28, 12, 28, 22)
+    image = Image.new("RGB", (33, 28))
+    drawing = ImageDraw.Draw(image, antialias=True)
+    drawing.path(path, fill="red", outline="white", width=3)
+    assert image.getpixel((16, 6)) == (255, 255, 255)
+    assert image.getpixel((16, 18)) == (255, 0, 0)
+    assert image.getpixel((16, 22))[1] == 0
+    assert image.getpixel((16, 25)) == (0, 0, 0)
+
+    path.close()
+    drawing.path(path, outline="white", width=3)
+    assert image.getpixel((16, 22)) == (255, 255, 255)
+
+
+@pytest.mark.parametrize(("rule", "reverse", "center"), [("nonzero", False, 255), ("nonzero", True, 0), ("evenodd", False, 0), ("evenodd", True, 0)])
+def test_bezier_path_fill_rules(rule, reverse, center):
+    path = ImageDraw.BezierPath()
+    for points in [[(2, 2), (26, 2), (26, 26), (2, 26)], [(8, 8), (20, 8), (20, 20), (8, 20)][:: -1 if reverse else 1]]:
+        path.move_to(*points[0])
+        for point in points[1:]:
+            path.line_to(*point)
+        path.close()
+    image = Image.new("L", (30, 30))
+    ImageDraw.Draw(image).path(path, fill=255, fill_rule=rule)
+    assert image.getpixel((4, 4)) == 255
+    assert image.getpixel((14, 14)) == center
+    assert image.getpixel((28, 28)) == 0
+
+
+@pytest.mark.parametrize(("cap", "past_end", "corner"), [("butt", 0, 0), ("round", 255, 0), ("square", 255, 255)])
+def test_bezier_path_caps(cap, past_end, corner):
+    path = ImageDraw.BezierPath()
+    path.move_to(8, 10)
+    path.line_to(20, 10)
+    image = Image.new("L", (28, 24))
+    ImageDraw.Draw(image).path(path, outline=255, width=8, cap=cap)
+    assert image.getpixel((5, 10)) == past_end
+    assert image.getpixel((5, 7)) == corner
+
+
+@pytest.mark.parametrize(("join", "miter_limit", "edge", "corner"), [("bevel", 4, 0, 0), ("round", 4, 255, 0), ("miter", 4, 255, 255), ("miter", 1, 0, 0)])
+def test_bezier_path_joins(join, miter_limit, edge, corner):
+    path = ImageDraw.BezierPath()
+    path.move_to(6, 14)
+    path.line_to(16, 14)
+    path.line_to(16, 24)
+    image = Image.new("L", (30, 30))
+    ImageDraw.Draw(image).path(path, outline=255, width=8, join=join, miter_limit=miter_limit)
+    assert image.getpixel((18, 11)) == edge
+    assert image.getpixel((19, 11)) == corner
+
+
+@pytest.mark.parametrize(("offset", "pixels"), [(0, [255, 0, 255]), (4, [0, 255, 0]), (-4, [0, 255, 0])])
+def test_bezier_path_dash_phase_across_tiles(offset, pixels):
+    path = ImageDraw.BezierPath()
+    path.move_to(0, 6)
+    path.line_to(1050, 6)
+    path.move_to(0, 12)
+    path.line_to(1050, 12)
+    image = Image.new("L", (1050, 18))
+    ImageDraw.Draw(image).path(path, outline=255, width=2, cap="butt", dash=[4], dash_offset=offset)
+    for y in (6, 12):
+        for tile in (0, 512, 1024):
+            assert [image.getpixel((tile + x, y)) for x in (2, 6, 10)] == pixels
+
+
+def test_bezier_path_dash_joins_at_closed_seam():
+    path = ImageDraw.BezierPath()
+    path.move_to(10, 10)
+    path.line_to(30, 10)
+    path.line_to(30, 30)
+    path.line_to(10, 30)
+    path.close()
+    solid = Image.new("L", (40, 40))
+    dashed = solid.copy()
+    options = {"outline": 255, "width": 8, "join": "miter", "cap": "butt"}
+    ImageDraw.Draw(solid).path(path, **options)
+    ImageDraw.Draw(dashed).path(path, dash=(100, 3), **options)
+    assert dashed.tobytes() == solid.tobytes()
+
+
+def test_bezier_path_blends_once_at_overlapping_contours():
+    path = ImageDraw.BezierPath()
+    for x in (2, 5):
+        path.move_to(x, 6)
+        path.line_to(x + 8, 6)
+    image = Image.new("RGB", (16, 14))
+    ImageDraw.Draw(image, "RGBA").path(path, outline=(255, 0, 0, 128), width=4)
+    assert image.getpixel((4, 6)) == image.getpixel((7, 6)) == (128, 0, 0)
+
+
+@pytest.mark.parametrize("options", [{"join": "invalid"}, {"cap": "invalid"}, {"dash": [3, 0]}, {"dash_offset": float("inf")}, {"width": -1}, {"fill_rule": "invalid"}])
+def test_bezier_path_invalid_style_leaves_image_unchanged(options):
+    path = ImageDraw.BezierPath()
+    with pytest.raises(ValueError, match="move_to"):
+        path.line_to(1, 1)
+    path.move_to(2, 2)
+    with pytest.raises(ValueError, match="finite"):
+        path.quadratic_to(float("nan"), 4, 5, 5)
+    path.line_to(8, 2)
+    path.line_to(8, 8)
+    image = Image.new("L", (12, 12))
+    with pytest.raises(ValueError):
+        ImageDraw.Draw(image).path(path, fill=255, outline=255, **options)
+    assert image.getbbox() is None
+
+
 @pytest.mark.parametrize("bounds", [((1, 1, 6, 6), (8, 8, 13, 13)), ((1, 1, 13, 13), (4, 4, 10, 10))])
 def test_shape_keeps_separate_outline_subpaths(bounds):
     actual, expected = new_pair("L", (16, 16), 0)

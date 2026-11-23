@@ -13,6 +13,7 @@ const STROKE_EPSILON: f64 = 1e-12;
 const MAX_MASK_PIXELS: usize = 100_000_000;
 
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    crate::bezier_path::register(module)?;
     crate::geometry::register(module)?;
     crate::rounded::register(module)?;
     crate::pillow::register(module)?;
@@ -244,7 +245,7 @@ fn fill_span<const C: usize>(pixels: &mut [u8], ink: &[u8]) {
     pixels.as_chunks_mut::<C>().0.fill(ink.try_into().unwrap());
 }
 
-fn coverage_paint(image: &mut Image, x: i64, y: i64, ink: &[u8], blend: bool, coverage: u8) {
+pub(crate) fn coverage_paint(image: &mut Image, x: i64, y: i64, ink: &[u8], blend: bool, coverage: u8) {
     if coverage == 255 {
         paint(image, x, y, ink, blend);
     } else if coverage != 0 && x >= 0 && y >= 0 && x < i64::from(image.width()) && y < i64::from(image.height()) {
@@ -267,7 +268,7 @@ fn supports_coverage(image: &Image) -> bool {
     !image.pixel_mode().is_wide_scalar() && image.palette().is_none() && !matches!(image.pixel_mode(), PixelMode::Pa | PixelMode::One)
 }
 
-fn check_coverage(image: &Image) -> PyResult<()> {
+pub(crate) fn check_coverage(image: &Image) -> PyResult<()> {
     if !supports_coverage(image) {
         return Err(PyValueError::new_err("anti-aliasing requires an 8-bit non-indexed image"));
     }
