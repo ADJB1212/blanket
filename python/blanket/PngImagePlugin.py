@@ -7,10 +7,11 @@ __lazy_modules__ = {"zlib", "struct"}
 import struct
 import zlib
 from enum import IntEnum
+from operator import truth
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Buffer, Iterator
     from typing import Self
 
     from ._typing import Writable
@@ -293,7 +294,7 @@ class PngInfo:
         """Create an empty collection of ancillary PNG chunks."""
         self.chunks: list[tuple[bytes, bytes, bool]] = []
 
-    def add(self, cid: bytes, data: bytes, after_idat: bool = False) -> None:
+    def add(self, cid: bytes, data: Buffer, after_idat: bool = False) -> None:
         """Append an ancillary chunk, optionally after the pixel data.
 
         Args:
@@ -306,9 +307,9 @@ class PngInfo:
         """
         if cid not in (b"tEXt", b"zTXt", b"iTXt") and (len(cid) != 4 or not cid.isalpha() or not cid[:1].islower() or not cid[2:3].isupper()):
             raise ValueError("PNG chunk must have a valid ancillary identifier")
-        self.chunks.append((cid, bytes(data), bool(after_idat)))
+        self.chunks.append((cid, bytes(data), truth(after_idat)))
 
-    def add_text(self, key: str | bytes, value: str | bytes, zip: bool = False) -> None:
+    def add_text(self, key: str | Buffer, value: str | Buffer, zip: bool = False) -> None:
         """Add Latin-1 text, using international text for Unicode values.
 
         Args:
@@ -330,7 +331,7 @@ class PngInfo:
         keyword = self._keyword(key)
         self.add(b"zTXt" if zip else b"tEXt", keyword + b"\0" + (b"\0" + zlib.compress(raw) if zip else raw))
 
-    def add_itxt(self, key: str | bytes, value: str | bytes, lang: str = "", tkey: str = "", zip: bool = False) -> None:
+    def add_itxt(self, key: str | Buffer, value: str | Buffer, lang: str = "", tkey: str = "", zip: bool = False) -> None:
         """Add UTF-8 text with optional language and translated keyword.
 
         Args:
@@ -348,7 +349,7 @@ class PngInfo:
         self.add(b"iTXt", fields + (zlib.compress(raw) if zip else raw))
 
     @staticmethod
-    def _keyword(key: str | bytes) -> bytes:
+    def _keyword(key: str | Buffer) -> bytes:
         """Validate and encode a PNG text chunk keyword into Latin-1 bytes."""
         raw = key.encode("latin-1") if isinstance(key, str) else bytes(key)
         if not 1 <= len(raw) <= 79 or b"\0" in raw:

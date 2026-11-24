@@ -4,7 +4,7 @@ from __future__ import annotations
 
 __lazy_modules__ = {"collections.abc"}
 
-from operator import index
+from operator import index, truth
 from typing import TYPE_CHECKING, cast, overload
 
 from ._blanket import _Path
@@ -177,7 +177,7 @@ class Path:
         Returns:
             A copy of the coordinates.
         """
-        return self._points.tolist(bool(flat))
+        return self._points.tolist(truth(flat))
 
     def transform(self, matrix: Sequence[float], wrap: float = 0) -> None:
         """Apply (a*x + b*y + c, d*x + e*y + f), optionally wrapping x with fmod.

@@ -14,7 +14,7 @@ from enum import IntEnum
 from math import ceil, floor, isfinite
 from operator import index as integer_index
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, override
 
 from . import Image
 from ._blanket import NativeFont, _font_stroke
@@ -70,6 +70,8 @@ class ImageFont:
     The built-in public-domain fallback uses fixed-width 8 by 8 glyphs for
     ImageDraw. Loaded PIL fonts contain up to 256 Latin-1 glyphs.
     """
+
+    size: float
 
     def __init__(self, size: float | None = None) -> None:
         """Create the public-domain bitmap font, optionally scaled to a pixel size.
@@ -321,6 +323,7 @@ class TrueTypeFont(ImageFont):
         ascent, descent = self._native.metrics(size)
         self._ascent, self._descent = ceil(ascent), ceil(descent)
 
+    @override
     def _layout(self, text: str, direction: str | None, features: Sequence[str] | None, language: str | None, render: bool, start: tuple[float, float] = (0, 0)) -> tuple[float, tuple[int, int, int, int], bytes]:
         """Shape outline text and optionally rasterize it through the native font."""
         return self._native.layout(text, self.size, direction, [] if features is None else list(features), language, render, start)
@@ -335,6 +338,7 @@ class TrueTypeFont(ImageFont):
             self._name = self._native.name()
         return self._name
 
+    @override
     def getlength(self, text: str | bytes, mode: str = "", direction: str | None = None, features: Sequence[str] | None = None, language: str | None = None) -> float:
         """Return the shaped advance without constructing glyph outlines.
 

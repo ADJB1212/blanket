@@ -300,7 +300,9 @@ def read_tiff_metadata(data: bytes, count: int, *, decoded: bool = False) -> Ite
                 xmp = info.get("xmp")
                 if isinstance(xmp, bytes):
                     info["xmp"] = ORIENTATION_REMOVE_BYTES_RE.sub(b"", xmp)
-            exif._raw, exif._entries, exif._next = b"", {}, 0
+            exif._raw = b""
+            exif._entries.clear()
+            exif._next = 0
             if exif or exif.thumbnail is not None:
                 info["exif"] = exif.tobytes()
         except (ValueError, struct.error):

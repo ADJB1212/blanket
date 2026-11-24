@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, cast, override
 
 from ._blanket import _Image, frombuffer_copy as _native_frombuffer_copy, mapped_getpixel
 from ._progress import validate_progress
@@ -47,6 +47,7 @@ class BufferPixelAccess(PixelAccess):
         self._palette = palette
 
     @property
+    @override
     def _native(self) -> _Image:
         """Create a native raster snapshot for reading pixels."""
         return self._mapping.snapshot(self._palette)
@@ -75,6 +76,7 @@ class MappedImage(Image):
         self.readonly = 1
 
     @property
+    @override
     def mode(self) -> str:
         """Return the pixel mode without copying mapped pixels."""
         if self._mapping is not None:
@@ -85,31 +87,37 @@ class MappedImage(Image):
         return self._raster.mode
 
     @property
+    @override
     def bit_depth(self) -> int:
         """Return sample depth without copying mapped pixels."""
         return self._raster.bit_depth
 
     @property
+    @override
     def size(self) -> tuple[int, int]:
         """Return dimensions without copying mapped pixels."""
         return self._raster.size
 
     @property
+    @override
     def width(self) -> int:
         """Return width without copying mapped pixels."""
         return self._raster.width
 
     @property
+    @override
     def height(self) -> int:
         """Return height without copying mapped pixels."""
         return self._raster.height
 
     @property
+    @override
     def format(self) -> str | None:
         """Return format without copying mapped pixels."""
         return self._raster.format
 
     @property
+    @override
     def _native(self) -> _Image:
         """Return the current native raster snapshot."""
         if self._mapping is not None:
@@ -122,6 +130,7 @@ class MappedImage(Image):
         self._mapping = None
         self._raster = native
 
+    @override
     def _ensure_mutable(self) -> None:
         """Detach from buffer mapping and ensure raster is mutable."""
         if self._mapping is not None:
@@ -129,11 +138,13 @@ class MappedImage(Image):
             self.readonly = 0
         super()._ensure_mutable()
 
+    @override
     def _check_open(self) -> None:
         """Check mapped raster lifetime without taking a pixel snapshot."""
         if self._mapping is None:
             self._raster.load()
 
+    @override
     def load(self, *, progress: ProgressCallback | None = None, show_progress: bool = False) -> PixelAccess:
         """Load pixel access interface for the mapped buffer."""
         if self._mapping is not None:
@@ -141,10 +152,12 @@ class MappedImage(Image):
             return BufferPixelAccess(self._mapping, self.palette)
         return super().load(progress=progress, show_progress=show_progress)
 
+    @override
     def _sync_palette(self) -> None:
         if self._mapping is None:
             super()._sync_palette()
 
+    @override
     def getpixel(self, xy: tuple[int, int] | list[int]) -> int | tuple[int, ...]:
         """Read a pixel directly from a live buffer mapping."""
         mapping = self._mapping
@@ -152,12 +165,14 @@ class MappedImage(Image):
             return super().getpixel(xy)
         return mapped_getpixel(mapping.data, mapping.mode, mapping.size, mapping.stride, mapping.orientation, _pixel_coordinates(xy), mapping.bit_depth)
 
+    @override
     def buffer_view(self) -> memoryview:
         """Return a read-only view retaining physical mapped rows and padding."""
         if self._mapping is None:
             return super().buffer_view()
         return self._mapping.data.toreadonly()
 
+    @override
     def array_view(self) -> np.ndarray:
         """Return mapped samples with their row padding and orientation retained."""
         if self._mapping is None:
@@ -175,12 +190,14 @@ class MappedImage(Image):
         # Keep the read-only buffer export as the base even if the original owner is writable.
         return np.asarray(memoryview(array))
 
+    @override
     def close(self) -> None:
         """Release buffer mapping and close native raster."""
         self._mapping = None
         super().close()
         self._raster.close()
 
+    @override
     def frombytes(self, data: object, decoder_name: str = "raw", *args: object) -> None:
         """Load pixel data from bytes into the mapped buffer or native raster."""
         mapping = self._mapping

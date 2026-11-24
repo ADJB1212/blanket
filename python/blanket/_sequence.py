@@ -8,10 +8,10 @@ import math
 import os
 from collections.abc import Iterable
 from itertools import islice, repeat
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
-    from ._typing import Writable
+    from ._typing import FilePath, Writable
 
 from ._blanket import _encode_sequence, _png_frame_plan
 from ._exif import save_metadata
@@ -200,7 +200,7 @@ def save_sequence(image: Image, fp: str | bytes | os.PathLike[str] | os.PathLike
         if prepared[0].size != canvas:
             prepared[0] = prepared[0].crop((0, 0, *canvas))
         regions = (canvas, [(0, 0)] * len(prepared))
-    output = None if fp is None or hasattr(fp, "write") else os.fspath(fp)
+    output = None if fp is None or hasattr(fp, "write") else os.fspath(cast("FilePath", fp))
     encoded = _encode_sequence(
         [frame._native for frame in prepared],
         format,

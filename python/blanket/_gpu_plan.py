@@ -95,9 +95,8 @@ class ProcessingPlan:
         if len(operations) > 1024:
             raise ValueError("GPU plans support at most 1024 operations")
         recorder = _Recorder()
-        template: GpuImage | GpuUnsignedImage = GpuImage(recorder, size, working_mode, "native", {})
-        if unsigned:
-            template = GpuUnsignedImage(template, mode, bit_depth)
+        base = GpuImage(recorder, size, working_mode, "native", {})
+        template = GpuUnsignedImage(base, mode, bit_depth) if unsigned else base
         for name, arguments in operations:
             if name not in _OPERATIONS or (unsigned and name in ("point", "posterize", "solarize")):
                 raise ValueError(f"unsupported GPU plan operation: {name}")

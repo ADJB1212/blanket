@@ -13,11 +13,16 @@ from typing import TYPE_CHECKING, cast
 from .ExifTags import IFD
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Buffer, Iterator
     from decimal import Decimal
-    from typing import BinaryIO, Self, SupportsIndex
+    from typing import BinaryIO, Protocol, Self, SupportsIndex
 
     from ._typing import BytesInput, FloatInput
+
+    class _RationalParts(Protocol):
+        numerator: int | float | str
+        denominator: int | float | str
+
 
 _FORMATS = {1: "B", 3: "H", 4: "I", 6: "b", 8: "h", 9: "i", 11: "f", 12: "d", 13: "I"}
 _SIZES = {1: 1, 2: 1, 3: 2, 4: 4, 5: 8, 6: 1, 7: 1, 8: 2, 9: 4, 10: 8, 11: 4, 12: 8, 13: 4}
@@ -55,8 +60,8 @@ def _pack_value(value: object, kind: int, endian: str) -> tuple[bytes, int]:
     numbers = []
     for item in items:
         is_rational = hasattr(item, "numerator") and hasattr(item, "denominator") and not isinstance(item, int)
-        rational = item if is_rational else Fraction(cast("int | float | str | Decimal", item)).limit_denominator(1000000)
-        numbers.extend((int(cast("int | float | str", rational.numerator)), int(cast("int | float | str", rational.denominator))))
+        rational = cast("_RationalParts", item) if is_rational else Fraction(cast("int | float | str | Decimal", item)).limit_denominator(1000000)
+        numbers.extend((int(rational.numerator), int(rational.denominator)))
     return struct.pack(f"{endian}{len(numbers)}{'I' if kind == 5 else 'i'}", *numbers), len(items)
 
 
@@ -133,7 +138,7 @@ class Exif(MutableMapping[int, object]):
         if state["_raw"] is None:
             self._raw = memoryview(self._source)[6:] if self._source.startswith(b"Exif\0\0") else memoryview(self._source)
 
-    def load(self, data: bytes) -> None:
+    def load(self, data: Buffer) -> None:
         """Load an EXIF APP1 payload or a classic TIFF byte stream."""
         self.__init__()
         self._source = bytes(data)
@@ -212,6 +217,7 @@ class Exif(MutableMapping[int, object]):
             return self._ifds[tag]
         parent = self.get_ifd(34665) if tag == 40965 else self._data
         value = parent.get(tag)
+        result: dict[int, object]
         if isinstance(value, Mapping):
             result = dict(value)
         elif isinstance(value, int) and value:

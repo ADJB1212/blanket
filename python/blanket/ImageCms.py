@@ -293,7 +293,7 @@ def _intent(value: int) -> int:
     """Validate a rendering intent and return its integer value."""
     if not isinstance(value, int) or not 0 <= value <= 3:
         raise PyCMSError("rendering intent must be an integer between 0 and 3")
-    return int(value)
+    return value
 
 
 class ImageCmsTransform:

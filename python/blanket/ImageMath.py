@@ -156,11 +156,12 @@ class _Operand:
         """Shift bits right by another operand or scalar."""
         return self._apply("rshift", self, other)
 
-    def __eq__(self, other: object) -> _Operand:  # ty: ignore[incompatible-method-override]
+    # Comparisons produce pixel masks for image expressions.
+    def __eq__(self, other: object) -> _Operand:  # ty: ignore[incompatible-method-override]  # pyrefly: ignore[bad-override]
         """Test equality with another operand or value."""
         return self._apply("eq", self, cast("_Operand | float", other))
 
-    def __ne__(self, other: object) -> _Operand:  # ty: ignore[incompatible-method-override]
+    def __ne__(self, other: object) -> _Operand:  # ty: ignore[incompatible-method-override]  # pyrefly: ignore[bad-override]
         """Test inequality with another operand or value."""
         return self._apply("ne", self, cast("_Operand | float", other))
 
@@ -188,15 +189,26 @@ def _convert(value: _Operand, mode: str) -> _Operand:
 
 def _context(operands: dict[str, object]) -> dict[str, object]:
     """Build the evaluation environment with operand wrappers and math helpers."""
-    context: dict[str, object] = {
-        "int": lambda value: _convert(value, "I"),
-        "float": lambda value: _convert(value, "F"),
-        "convert": _convert,
-        "min": lambda a, b: a._apply("min", a, b),
-        "max": lambda a, b: a._apply("max", a, b),
-        "equal": lambda a, b: a._apply("eq", a, b, integer_output=True),
-        "notequal": lambda a, b: a._apply("ne", a, b, integer_output=True),
-    }
+
+    def as_int(value: _Operand) -> _Operand:
+        return _convert(value, "I")
+
+    def as_float(value: _Operand) -> _Operand:
+        return _convert(value, "F")
+
+    def minimum(a: _Operand, b: _Operand | float) -> _Operand:
+        return a._apply("min", a, b)
+
+    def maximum(a: _Operand, b: _Operand | float) -> _Operand:
+        return a._apply("max", a, b)
+
+    def equal(a: _Operand, b: _Operand | float) -> _Operand:
+        return a._apply("eq", a, b, integer_output=True)
+
+    def notequal(a: _Operand, b: _Operand | float) -> _Operand:
+        return a._apply("ne", a, b, integer_output=True)
+
+    context: dict[str, object] = {"int": as_int, "float": as_float, "convert": _convert, "min": minimum, "max": maximum, "equal": equal, "notequal": notequal}
     context.update(operands)
     return {name: _Operand(value) if isinstance(value, Image.Image) else value for name, value in context.items()}
 

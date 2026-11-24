@@ -10,7 +10,7 @@ from __future__ import annotations
 __lazy_modules__ = {"contextlib", "types", "os"}
 
 from contextlib import ExitStack
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from ._blanket import PngStreamWriter, StreamingDecoder, UnidentifiedImageError
 from .Image import Image
@@ -22,6 +22,8 @@ if TYPE_CHECKING:
     import os
     from types import TracebackType
     from typing import BinaryIO, Self
+
+    from ._typing import FilePath
 
 
 class Parser:
@@ -68,28 +70,30 @@ class Parser:
         if isinstance(view, memoryview):
             view = view.cast("B") if view.c_contiguous else view.tobytes()
         try:
-            if self._decoder is None:
+            decoder = self._decoder
+            if decoder is None:
                 whole_chunk = isinstance(view, bytes) and not self._prefix
                 count = min(12 - len(self._prefix), len(view))
                 self._prefix.extend(view[:count])
                 prefix = self._prefix
                 if prefix.startswith(b"\xff\x0a") or prefix == b"\x00\x00\x00\x0cJXL \x0d\x0a\x87\x0a":
-                    self._decoder = StreamingDecoder("JXL")
+                    decoder = StreamingDecoder("JXL")
                 elif prefix.startswith(b"\xff\xd8"):
-                    self._decoder = StreamingDecoder("JPEG")
+                    decoder = StreamingDecoder("JPEG")
                 elif len(prefix) < 12:
                     return
                 else:
                     raise UnidentifiedImageError("streaming decode supports JXL and JPEG")
+                self._decoder = decoder
                 if whole_chunk:
-                    self._decoder.feed(view)
+                    decoder.feed(view)
                     self._prefix.clear()
                     return
-                self._decoder.feed(bytes(prefix))
+                decoder.feed(bytes(prefix))
                 self._prefix.clear()
                 view = memoryview(view)[count:] if isinstance(view, bytes) else view[count:]
             if view:
-                self._decoder.feed(view if isinstance(view, bytes) else view.tobytes())
+                decoder.feed(view if isinstance(view, bytes) else view.tobytes())
         except Exception:
             self._closed = True
             self._decoder = None
@@ -148,7 +152,7 @@ class PngWriter:
             raise ValueError("invalid bit depth or compression level")
         PngStreamWriter.validate(mode, size, bit_depth, compress_level)
         with ExitStack() as stack:
-            self._fp = stack.enter_context(open(fp, "wb")) if not hasattr(fp, "write") else fp
+            self._fp = stack.enter_context(open(cast("FilePath", fp), "wb")) if not hasattr(fp, "write") else fp
             self._writer: PngStreamWriter | None = PngStreamWriter(self._fp, mode, size, bit_depth, compress_level)
             self._stack = stack.pop_all()
 

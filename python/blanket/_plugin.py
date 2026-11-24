@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, override
 
 from ._blanket import UnidentifiedImageError
 from .Image import Image, open
@@ -17,6 +17,7 @@ class PluginImageMeta(type):
 
     _format: str
 
+    @override
     def __instancecheck__(cls, instance: object) -> bool:
         """Check if instance is an Image with matching format."""
         return isinstance(instance, Image) and instance.format == cls._format

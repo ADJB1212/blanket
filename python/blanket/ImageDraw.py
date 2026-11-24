@@ -11,7 +11,7 @@ __lazy_modules__ = {"collections.abc", "blanket.ImagePath", "blanket._draw_font"
 
 import sys
 from math import ceil, isfinite
-from operator import index
+from operator import index, truth
 from typing import TYPE_CHECKING, cast
 
 from . import Image
@@ -43,14 +43,16 @@ from .ImageFont import load_default
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-    from typing import Protocol, TypedDict
+    from typing import Protocol
+
+    from typing_extensions import TypedDict
 
     from .ImagePath import Path
 
     Coords = Sequence[float] | Sequence[tuple[float, float]] | Path
     Color = int | float | str | tuple[float, ...] | None
 
-    class _FontOptions(TypedDict, total=False):
+    class _FontOptions(TypedDict, total=False, closed=True):
         direction: str
         features: Sequence[str]
         language: str
@@ -389,9 +391,9 @@ class ImageDraw:
         fill_ink = None if fill is None else self._ink(fill)
         outline_ink = None if outline is None else self._ink(outline)
         if fill_ink is not None:
-            draw_ellipse(self.im._native, bounds, fill_ink, 0, bool(self.blend), bool(self.antialias))
+            draw_ellipse(self.im._native, bounds, fill_ink, 0, bool(self.blend), truth(self.antialias))
         if outline_ink is not None and outline_ink != fill_ink and width > 0:
-            draw_ellipse(self.im._native, bounds, outline_ink, width, bool(self.blend), bool(self.antialias))
+            draw_ellipse(self.im._native, bounds, outline_ink, width, bool(self.blend), truth(self.antialias))
 
     def line(self, xy: Coords, fill: Color = None, width: int = 0, joint: str | None = None) -> None:
         """Draw connected line segments through a sequence of coordinates.
@@ -449,7 +451,7 @@ class ImageDraw:
             fill: Stroke ink. `None` uses the context's default ink.
             width: Stroke thickness in pixels, with a minimum of one.
         """
-        draw_bezier(self.im._native, xy, self._ink(fill), max(1, index(width)), bool(self.blend), bool(self.antialias))
+        draw_bezier(self.im._native, xy, self._ink(fill), max(1, index(width)), bool(self.blend), truth(self.antialias))
 
     def path(
         self, path: BezierPath, fill: Color = None, outline: Color = None, width: float = 1, *, join: str = "round", cap: str = "round", dash: Sequence[float] | None = None, dash_offset: float = 0, miter_limit: float = 4, fill_rule: str = "nonzero"
@@ -486,7 +488,7 @@ class ImageDraw:
         """
         fill_ink = None if fill is None else self._ink(fill)
         outline_ink = None if outline is None or width == 0 else self._ink(outline)
-        draw_bezier_path(self.im._native, path, (fill_ink, outline_ink), (width, join, cap, miter_limit), (() if dash is None else dash, dash_offset), fill_rule, (bool(self.blend), bool(self.antialias)))
+        draw_bezier_path(self.im._native, path, (fill_ink, outline_ink), (width, join, cap, miter_limit), (() if dash is None else dash, dash_offset), fill_rule, (bool(self.blend), truth(self.antialias)))
 
     def pieslice(self, xy: Coords, start: float, end: float, fill: Color = None, outline: Color = None, width: int = 1) -> None:
         """Draw an elliptical sector bounded by an arc and two radii.
@@ -545,7 +547,7 @@ class ImageDraw:
     def _path(self, points: Sequence[tuple[float, float]], fill: Color, *, width: int = 1, closed: bool = False, filled: bool = False) -> None:
         """Rasterize a path using the context's ink, blend, and coverage settings."""
         style = "fill" if filled else ("outline" if closed else "line")
-        draw_path(self.im._native, list(points), self._ink(fill), width, style, bool(self.blend), bool(self.antialias))
+        draw_path(self.im._native, list(points), self._ink(fill), width, style, bool(self.blend), truth(self.antialias))
 
     def _shape(self, points: Sequence[tuple[float, float]], fill: Color, outline: Color, width: int) -> None:
         """Fill a closed path, then draw its distinct positive-width outline."""

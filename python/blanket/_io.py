@@ -15,13 +15,13 @@ from ._blanket import UnidentifiedImageError
 if TYPE_CHECKING:
     from typing import BinaryIO
 
-    from ._typing import Writable
+    from ._typing import FilePath, Writable
 
 
 def read_bytes(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, *, restore_position: bool = False) -> bytes:
     """Read encoded bytes, rewinding streams and optionally restoring position."""
     if not hasattr(fp, "read"):
-        return Path(os.fsdecode(os.fspath(fp))).read_bytes()
+        return Path(os.fsdecode(os.fspath(cast("FilePath", fp)))).read_bytes()
     stream = cast("BinaryIO", fp)
     position = None
     if restore_position:
@@ -75,7 +75,7 @@ def write_bytes(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | Writab
     if hasattr(fp, "write"):
         write_all(cast("Writable", fp), data)
     else:
-        with open(fp, "wb") as output:
+        with open(cast("FilePath", fp), "wb") as output:
             output.write(data)
 
 

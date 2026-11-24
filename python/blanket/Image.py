@@ -37,7 +37,7 @@ if TYPE_CHECKING:
 
     from ._blanket import _Image
     from ._lazy_frames import LazyFrames
-    from ._typing import BytesInput, FloatInput, ProgressCallback, Writable
+    from ._typing import BytesInput, FilePath, FloatInput, ProgressCallback, Writable
     from .ImageFilter import Filter
     from .ImagePalette import ImagePalette
 
@@ -475,7 +475,7 @@ class ImageTransformHandler:
         raise NotImplementedError
 
 
-def _pixel_coordinates(xy: tuple[int, int] | list[int]) -> tuple[int, int]:
+def _pixel_coordinates(xy: Sequence[float | SupportsIndex]) -> tuple[int, int]:
     """Validate getpixel coordinates and truncate floating-point components."""
     if not isinstance(xy, (tuple, list)):
         raise TypeError("argument must be a sequence")
@@ -517,7 +517,12 @@ class PixelAccess(_PixelAccess):
             pixels = image.load()
             ```
         """
-        self._native = native
+        self._pixel_raster = native
+
+    @property
+    def _native(self) -> _Image:
+        """Return the native raster backing this accessor."""
+        return self._pixel_raster
 
 
 class Image:
@@ -2613,10 +2618,10 @@ class Image:
             result.info.update(self._metadata_info())
             return result
         if callable(lut):
-            values = [cast("Callable[[int], float]", lut)(i) for i in range(256)]
+            values = [lut(i) for i in range(256)]
             expected = 256
         else:
-            values = list(cast("Sequence[float]", lut))
+            values = list(lut)
             expected = 256 * len(self.getbands())
         if len(values) != expected:
             raise ValueError("wrong number of lut entries")
@@ -2834,10 +2839,10 @@ class Image:
 
         def coordinates(values: Sequence[object], count: int) -> tuple[float, ...]:
             """Validate and convert the expected number of finite float coordinates."""
-            values = tuple(float(cast("FloatInput", v)) for v in values[:count])
-            if len(values) != count or not all(math.isfinite(v) for v in values):
+            converted = tuple(float(cast("FloatInput", v)) for v in values[:count])
+            if len(converted) != count or not all(math.isfinite(v) for v in converted):
                 raise ValueError(f"transform requires {count} finite coordinates")
-            return values
+            return converted
 
         if method in (Transform.AFFINE, Transform.EXTENT):
             if method == Transform.EXTENT:
@@ -3533,7 +3538,7 @@ class Image:
             metadata[3].append((b"tRNS", png_key, False))
         values = _save_options(output_format, options, self)
         has_metadata = any(metadata)
-        output = None if fp is None or hasattr(fp, "write") else os.fspath(fp)
+        output = None if fp is None or hasattr(fp, "write") else os.fspath(cast("FilePath", fp))
         with progress_display(progress, show_progress=compressor is not None and compressor._show_progress, description="Compressing") as report:
             encoded = _encode(
                 native,
@@ -3613,9 +3618,9 @@ class Image:
             print(a == b)
             ```
         """
-        return (
-            type(self) is type(other) and self.mode == other.mode and self.size == other.size and self.bit_depth == other.bit_depth and self.info == other.info and self.getpalette() == other.getpalette() and self._native.pixels_equal(other._native)
-        )
+        if not isinstance(other, Image) or type(self) is not type(other):
+            return False
+        return self.mode == other.mode and self.size == other.size and self.bit_depth == other.bit_depth and self.info == other.info and self.getpalette() == other.getpalette() and self._native.pixels_equal(other._native)
 
 
 def linear_gradient(mode: str) -> Image:
@@ -4009,11 +4014,11 @@ def open(
                 image = _open_deferred(data, header)
                 if image is not None:
                     if not hasattr(fp, "read"):
-                        image.filename = os.fspath(fp)
+                        image.filename = os.fspath(cast("FilePath", fp))
                     return image
         image = _decode(data, formats, lazy, frame_cache_size, svg_size, svg_dpi, report)
     if not hasattr(fp, "read"):
-        image.filename = os.fspath(fp)
+        image.filename = os.fspath(cast("FilePath", fp))
     return image
 
 
@@ -4052,7 +4057,7 @@ def _open_deferred(data: bytes, header: ImageHeader) -> Image | None:
             return None
     parsed = None
     if header.format == "JPEG":
-        from ._jpeg import read_attributes, sanitize_jpeg, segments
+        from ._jpeg import segments
 
         parsed = segments(data)
     info = read_metadata(data, header.format, jpeg_segments=parsed)
@@ -4061,6 +4066,8 @@ def _open_deferred(data: bytes, header: ImageHeader) -> Image | None:
     image = Image(header)
     image._info.update(info)
     if header.format == "JPEG":
+        from ._jpeg import read_attributes, sanitize_jpeg
+
         cleaned, truncated = sanitize_jpeg(data)
         if truncated:
             # Preserve the existing truncated-stream recovery and load checks.
@@ -4185,11 +4192,11 @@ def _decode(data: bytes, formats: list[str] | tuple[str, ...] | None, lazy: bool
     seek_error = None
     truncated_jpeg = False
     declared_frames = None
-    if data.startswith(b"\x89PNG\r\n\x1a\n") and (formats is None or any(str(f).upper() == "PNG" for f in formats)):
+    if data.startswith(b"\x89PNG\r\n\x1a\n") and (formats is None or any(f.upper() == "PNG" for f in formats)):
         from .PngImagePlugin import sanitize_apng
 
         data, seek_error, declared_frames = sanitize_apng(data)
-    elif data.startswith(b"\xff\xd8") and (formats is None or any(str(f).upper() in ("JPEG", "JPG") for f in formats)):
+    elif data.startswith(b"\xff\xd8") and (formats is None or any(f.upper() in ("JPEG", "JPG") for f in formats)):
         from . import ImageFile
         from ._jpeg import sanitize_jpeg
 
@@ -4384,13 +4391,12 @@ def frombytes(mode: str, size: tuple[int, int], data: object, decoder_name: str 
         if decoder_name == "raw" and not isinstance(data, bytes) and not hasattr(type(data), "__bytes__"):
             with suppress(TypeError):
                 raw_view = memoryview(cast("Buffer", data))
-        if raw_view is None:
-            raw = bytes(cast("BytesInput", data))
+        raw = bytes(cast("BytesInput", data)) if raw_view is None else raw_view
     except (TypeError, ValueError) as error:
         raise TypeError("data must be a bytes-like object") from error
     rawmode, stride, orientation = _raw_args(mode, "raw" if decoder_name in ("hex", "packbits") else decoder_name, args)
-    if raw_view is not None:
-        native = _native_frombuffer_copy("L" if mode == "P" else mode, size, raw_view, bit_depth, rawmode, stride, orientation)
+    if isinstance(raw, memoryview):
+        native = _native_frombuffer_copy("L" if mode == "P" else mode, size, raw, bit_depth, rawmode, stride, orientation)
     else:
         native = _native_frombytes("L" if mode == "P" else mode, size, raw, bit_depth, rawmode, stride, orientation, decoder_name)
     result = Image(native)
@@ -4576,7 +4582,7 @@ def _output_format(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | Wri
         return normalized
     if hasattr(fp, "write"):
         raise ValueError("unknown file extension; specify format")
-    filename = os.fspath(cast("str | bytes | os.PathLike[str] | os.PathLike[bytes]", fp))
+    filename = os.fspath(cast("FilePath", fp))
     extension = Path(os.fsdecode(filename)).suffix.lower()
     try:
         return _EXTENSIONS[extension]
@@ -4596,11 +4602,10 @@ def _save_options(format: str, supplied: dict[str, object], image: Image | None 
         raise TypeError("lossless must be a bool")
     jpeg_tables = supplied.get("qtables")
     jpeg_sampling = supplied.get("subsampling", -1)
+    requested_quality = supplied.get("quality", -1)
     if format == "JPEG":
-        from ._jpeg import validate_qtables
         from .JpegPresets import presets
 
-        requested_quality = supplied.get("quality", -1)
         if requested_quality == "keep":
             if image is None or image.format != "JPEG":
                 raise ValueError("Cannot use 'keep' when original image is not a JPEG")
@@ -4623,7 +4628,7 @@ def _save_options(format: str, supplied: dict[str, object], image: Image | None 
     compress_level = _bounded_int("compress_level", supplied.get("compress_level", 6), 0, 9)
     effort = _bounded_int("effort", supplied.get("effort", 7), 1, 10)
 
-    values = {"quality": quality, "compress_level": compress_level, "lossless": lossless, "effort": effort}
+    values: dict[str, object] = {"quality": quality, "compress_level": compress_level, "lossless": lossless, "effort": effort}
     if format == "EXR":
         sample_type = supplied.get("exr_sample_type", "float")
         if not isinstance(sample_type, str):
@@ -4652,6 +4657,9 @@ def _save_options(format: str, supplied: dict[str, object], image: Image | None 
                 raise ValueError(f"{name} must be finite and between {minimum} and {maximum}")
             values[name] = number
     if format == "JPEG":
+        from ._jpeg import validate_qtables
+        from .JpegPresets import presets
+
         subsampling = jpeg_sampling
         if isinstance(subsampling, str) and subsampling in presets:
             subsampling = presets[subsampling]["subsampling"]
