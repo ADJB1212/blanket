@@ -41,7 +41,19 @@ fn source_dir() -> PathBuf {
     let status = Command::new("git")
         .arg("-C")
         .arg(&source)
-        .args(["submodule", "update", "--init", "--force", "--depth", "1", "--", "third_party/brotli", "third_party/highway", "third_party/lcms"])
+        .args([
+            "submodule",
+            "update",
+            "--init",
+            "--force",
+            "--depth",
+            "1",
+            "--",
+            "third_party/brotli",
+            "third_party/highway",
+            "third_party/lcms",
+            "third_party/skcms",
+        ])
         .status()
         .expect("failed to run git to initialize libjxl dependencies");
     assert!(status.success(), "failed to initialize libjxl dependencies");
